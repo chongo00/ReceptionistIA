@@ -9,12 +9,37 @@ const api = axios.create({
   timeout: 10_000,
 });
 
+let cachedToken: string | null = null;
+
+async function getBearerToken(): Promise<string | null> {
+  // 1) Prefer token fijo si está configurado
+  if (env.blindsbookApiToken) return env.blindsbookApiToken;
+
+  // 2) Si ya hicimos login en runtime, reutilizar
+  if (cachedToken) return cachedToken;
+
+  // 3) Auto-login opcional (para desarrollo): POST /auth/login
+  if (env.blindsbookLoginEmail && env.blindsbookLoginPassword) {
+    const res = await api.post<{
+      success: boolean;
+      data?: { token?: string };
+    }>('/auth/login', {
+      email: env.blindsbookLoginEmail,
+      password: env.blindsbookLoginPassword,
+    });
+
+    const token = res.data?.data?.token;
+    if (token) {
+      cachedToken = token;
+      return token;
+    }
+  }
+
+  return null;
+}
+
 api.interceptors.request.use((config) => {
   const headers = config.headers ?? {};
-  if (env.blindsbookApiToken) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (headers as any).Authorization = `Bearer ${env.blindsbookApiToken}`;
-  }
   config.headers = headers;
   return config;
 });
@@ -22,7 +47,9 @@ api.interceptors.request.use((config) => {
 export async function createAppointment(
   payload: CreateAppointmentPayload,
 ): Promise<Appointment> {
-  const response = await api.post<Appointment>('/appointments', payload);
+  const token = await getBearerToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+  const response = await api.post<Appointment>('/appointments', payload, { headers });
   return response.data;
 }
 
@@ -51,8 +78,11 @@ export async function findCustomerIdBySearch(
   const term = search.trim();
   if (!term) return null;
 
+  const token = await getBearerToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
   const response = await api.get<CustomersListResponse>('/customers', {
     params: { search: term, page: 1, pageSize: 5 },
+    headers,
   });
 
   const customers = response.data?.data?.customers ?? [];

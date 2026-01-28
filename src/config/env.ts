@@ -4,6 +4,8 @@ export interface EnvConfig {
   twilioValidateSignature: boolean;
   blindsbookApiBaseUrl: string;
   blindsbookApiToken: string;
+  blindsbookLoginEmail: string | null;
+  blindsbookLoginPassword: string | null;
   aiServiceUrl: string | null;
   aiServiceApiKey: string | null;
 }
@@ -16,6 +18,9 @@ export function loadEnv(): EnvConfig {
     process.env.BLINDSBOOK_API_BASE_URL || 'http://localhost:3000';
   const blindsbookApiToken = process.env.BLINDSBOOK_API_TOKEN || '';
 
+  const blindsbookLoginEmail = process.env.BLINDSBOOK_LOGIN_EMAIL || null;
+  const blindsbookLoginPassword = process.env.BLINDSBOOK_LOGIN_PASSWORD || null;
+
   const aiServiceUrl = process.env.AI_SERVICE_URL || null;
   const aiServiceApiKey = process.env.AI_SERVICE_API_KEY || null;
 
@@ -26,6 +31,8 @@ export function loadEnv(): EnvConfig {
       process.env.TWILIO_VALIDATE_SIGNATURE !== 'false',
     blindsbookApiBaseUrl,
     blindsbookApiToken,
+    blindsbookLoginEmail,
+    blindsbookLoginPassword,
     aiServiceUrl,
     aiServiceApiKey,
   };

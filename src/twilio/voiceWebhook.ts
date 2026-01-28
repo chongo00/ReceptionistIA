@@ -11,12 +11,17 @@ const env = loadEnv();
 
 twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   const callId = String(req.body.CallSid || '');
+  const fromNumber = typeof req.body.From === 'string' ? req.body.From : null;
   const digits = typeof req.body.Digits === 'string' ? req.body.Digits : null;
   const speechResult =
     typeof req.body.SpeechResult === 'string' ? req.body.SpeechResult : null;
 
   // Para este esqueleto usamos SpeechResult si existe, si no Digits, si no null.
-  const userText = speechResult || digits;
+  let userText = speechResult || digits;
+  // Si el sistema está preguntando por el cliente y no hay input, intentamos usar Caller ID.
+  if (!userText && fromNumber) {
+    userText = fromNumber;
+  }
 
   const voiceResponse = new Twiml.VoiceResponse();
 
