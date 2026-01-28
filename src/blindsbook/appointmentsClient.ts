@@ -5,7 +5,8 @@ import { loadEnv } from '../config/env.js';
 const env = loadEnv();
 
 const api = axios.create({
-  baseURL: env.blindsbookApiBaseUrl,
+  // La API NestJS expone rutas bajo /api (ver swagger: /api-docs-json)
+  baseURL: `${env.blindsbookApiBaseUrl.replace(/\/$/, '')}/api`,
   timeout: 10_000,
 });
 
@@ -30,7 +31,7 @@ async function getBearerToken(): Promise<string | null> {
   // 3) Si ya hicimos login en runtime, reutilizar
   if (cachedToken) return cachedToken;
 
-  // 4) Auto-login opcional (para desarrollo): POST /auth/login
+  // 4) Auto-login opcional (para desarrollo): POST /api/auth/login
   if (env.blindsbookLoginEmail && env.blindsbookLoginPassword) {
     const res = await api.post<{
       success: boolean;

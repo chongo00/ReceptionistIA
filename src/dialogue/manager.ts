@@ -67,6 +67,14 @@ export function handleUserInput(
         };
       }
       case 'greeting': {
+        // Si hay input, intentar procesarlo como tipo de cita directamente
+        if (trimmed) {
+          // Avanzar a askType y procesar el input
+          state = { ...state, step: 'askType' };
+          // Continuar procesando en askType (recursivo)
+          return run();
+        }
+        // Si no hay input, solo avanzar y preguntar
         state = { ...state, step: 'askType' };
         const replyText = t(
           'Te ayudaré a agendar una cita. ¿La visita es para una cotización, instalación o reparación?',

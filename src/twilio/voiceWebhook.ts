@@ -1,5 +1,5 @@
 import express from 'express';
-import { twiml as Twiml } from 'twilio';
+import twilio from 'twilio';
 import { handleUserInput, setConversationState, clearConversationState } from '../dialogue/manager.js';
 import { loadEnv } from '../config/env.js';
 import { createAppointment } from '../blindsbook/appointmentsClient.js';
@@ -36,7 +36,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
     userText = fromNumber;
   }
 
-  const voiceResponse = new Twiml.VoiceResponse();
+  const voiceResponse = new twilio.twiml.VoiceResponse();
 
   try {
     const { state, replyText, isFinished } = await handleUserInput(callId, userText);
@@ -112,7 +112,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Error en webhook de Twilio:', error);
-    const errorResponse = new Twiml.VoiceResponse();
+    const errorResponse = new twilio.twiml.VoiceResponse();
     errorResponse.say(
       {
         language: 'es-ES',
