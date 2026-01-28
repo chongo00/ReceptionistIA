@@ -10,15 +10,27 @@ const api = axios.create({
 });
 
 let cachedToken: string | null = null;
+let currentTokenOverride: string | null = null;
+
+export function setTokenForCompany(token: string): void {
+  currentTokenOverride = token;
+}
+
+export function clearTokenOverride(): void {
+  currentTokenOverride = null;
+}
 
 async function getBearerToken(): Promise<string | null> {
-  // 1) Prefer token fijo si está configurado
+  // 1) Prefer token override (por número Twilio)
+  if (currentTokenOverride) return currentTokenOverride;
+
+  // 2) Prefer token fijo si está configurado
   if (env.blindsbookApiToken) return env.blindsbookApiToken;
 
-  // 2) Si ya hicimos login en runtime, reutilizar
+  // 3) Si ya hicimos login en runtime, reutilizar
   if (cachedToken) return cachedToken;
 
-  // 3) Auto-login opcional (para desarrollo): POST /auth/login
+  // 4) Auto-login opcional (para desarrollo): POST /auth/login
   if (env.blindsbookLoginEmail && env.blindsbookLoginPassword) {
     const res = await api.post<{
       success: boolean;

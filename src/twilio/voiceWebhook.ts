@@ -3,6 +3,7 @@ import { twiml as Twiml } from 'twilio';
 import { handleUserInput, setConversationState, clearConversationState } from '../dialogue/manager.js';
 import { loadEnv } from '../config/env.js';
 import { createAppointment } from '../blindsbook/appointmentsClient.js';
+import { setTokenForCompany, clearTokenOverride } from '../blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from '../models/appointments.js';
 
 export const twilioVoiceRouter = express.Router();
@@ -11,10 +12,22 @@ const env = loadEnv();
 
 twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   const callId = String(req.body.CallSid || '');
+  const toNumber = typeof req.body.To === 'string' ? req.body.To : null;
   const fromNumber = typeof req.body.From === 'string' ? req.body.From : null;
   const digits = typeof req.body.Digits === 'string' ? req.body.Digits : null;
   const speechResult =
     typeof req.body.SpeechResult === 'string' ? req.body.SpeechResult : null;
+
+  // Determinar compañía por número Twilio (To = número que recibió la llamada)
+  const companyConfig = toNumber ? env.twilioNumberToCompanyMap.get(toNumber) : null;
+  if (companyConfig) {
+    setTokenForCompany(companyConfig.token);
+    // eslint-disable-next-line no-console
+    console.log(`[Twilio] Usando token para compañía ${companyConfig.companyId} (número: ${toNumber})`);
+  } else if (env.blindsbookApiToken) {
+    // Fallback a token por defecto si no hay mapping
+    clearTokenOverride();
+  }
 
   // Para este esqueleto usamos SpeechResult si existe, si no Digits, si no null.
   let userText = speechResult || digits;
