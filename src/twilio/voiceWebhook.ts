@@ -21,7 +21,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   const voiceResponse = new Twiml.VoiceResponse();
 
   try {
-    const { state, replyText, isFinished } = handleUserInput(callId, userText);
+    const { state, replyText, isFinished } = await handleUserInput(callId, userText);
 
     // Si llegamos al paso de creación, mandamos una llamada de ejemplo a la API.
     if (state.step === 'creatingAppointment' && state.type !== null) {
@@ -62,18 +62,22 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
       }
     }
 
+    const isAskingLanguage = state.step === 'askLanguage';
+    const twilioLang = state.language === 'en' ? 'en-US' : 'es-ES';
+
     const gather = voiceResponse.gather({
-      input: ['speech', 'dtmf'],
+      input: isAskingLanguage ? ['dtmf', 'speech'] : ['speech', 'dtmf'],
+      numDigits: isAskingLanguage ? 1 : undefined,
       speechTimeout: 'auto',
       action: '/twilio/voice-webhook',
       method: 'POST',
-      language: 'es-ES',
+      language: twilioLang,
     });
 
     gather.say(
       {
-        language: 'es-ES',
-        voice: 'Polly.Lucia',
+        language: twilioLang,
+        voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
       } as any,
       replyText,
     );

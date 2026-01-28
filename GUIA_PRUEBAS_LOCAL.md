@@ -15,8 +15,8 @@ En producción **no toca la BD directamente**: siempre va por la API.
 
 - Node.js **>= 24.13.0**
 - Tener el proyecto BlindsBook API funcionando localmente (puerto 3000).
-- Cuenta de **Twilio** con número de voz (puede ser trial).
-- Un túnel tipo **ngrok** (o alternativa) para exponer tu webhook local a internet.
+- **Opción A (100% gratis, sin llamadas reales):** usar el endpoint local `POST /debug/chat`.
+- **Opción B (llamadas reales):** cuenta de **Twilio** con número de voz (puede ser trial) + un túnel tipo **ngrok** (o alternativa) para exponer tu webhook local a internet.
 
 ## 2) Levantar la API de BlindsBook en local
 
@@ -44,17 +44,17 @@ npm install
 
 ### 3.1) Crear `.env`
 
-1. Copia el ejemplo:
-   - Copia `.env.example` a `.env`
-
-2. Edita `.env` con valores reales:
+Ya te dejé un archivo `.env` creado con placeholders. Solo debes completar lo que falta.
 
 - **BLINDSBOOK_API_BASE_URL**: para local debe ser:
   - `http://localhost:3000`
 
 - **BLINDSBOOK_API_TOKEN**:
   - Debe ser un token/JWT válido que tu API acepte para crear citas.
-  - Si tu API requiere login, obtén un JWT con el flujo normal y pégalo aquí.
+  - Cómo conseguirlo (rápido):
+    - Inicia sesión en tu app (web/móvil) contra la API local.
+    - Abre DevTools (F12) → Network → busca el response del login.
+    - Copia el token y pégalo en `BLINDSBOOK_API_TOKEN`.
 
 - **TWILIO_AUTH_TOKEN**:
   - Tu Auth Token de Twilio (para validación de firma si la activas).
@@ -69,7 +69,8 @@ TWILIO_AUTH_TOKEN=tu_twilio_auth_token
 TWILIO_VALIDATE_SIGNATURE=true
 ```
 
-> Nota: hoy el servicio **no resuelve `customerId` automáticamente** (se guarda nombre pero no busca el id). Para que cree citas reales en BlindsBook, debes implementar la resolución de cliente (siguiente iteración) o inyectar `customerId` de prueba en el estado.
+✅ Ya quedó implementado: el servicio ahora intenta resolver `customerId` llamando a:
+`GET /customers?search=<texto>` y toma el primer resultado.
 
 ### 3.2) Arrancar RecepcionistIA
 
@@ -81,6 +82,10 @@ Verifica:
 - `http://localhost:4000/health` devuelve `ok: true`
 
 ## 4) Exponer tu webhook local (ngrok)
+
+### ¿Debo instalar algo?
+
+Sí. Para pruebas con llamadas reales, necesitas **instalar y ejecutar** un túnel (ngrok o similar) en tu PC.
 
 En otra terminal:
 
@@ -98,6 +103,11 @@ Tu webhook quedará:
 
 En Twilio Console:
 
+### ¿Debo instalar algo?
+
+- No instalas nada para Twilio: es una cuenta web.
+- Necesitas crear una cuenta en Twilio y comprar/usar un número de voz (en trial te dan crédito para pruebas).
+
 1. Ve a tu **Phone Number** (voz).
 2. En **Voice configuration**:
    - **A Call Comes In**:
@@ -113,8 +123,11 @@ Llama al número de Twilio. Deberías escuchar las preguntas.
 
 ### Estado actual
 
-- **Mensajes**: hoy están en español.
-- **Twilio Gather**: configurado con `language: 'es-ES'` y voz `Polly.Lucia`.
+✅ Ya quedó implementado:
+- Primer paso: menú de idioma:
+  - “Para español, presione 1. For English, press 2.”
+- Las respuestas cambian según el idioma elegido.
+- Twilio cambia `language` y voz según idioma.
 
 ### Para habilitar bilingüe (recomendación de pruebas)
 
@@ -130,7 +143,7 @@ Llama al número de Twilio. Deberías escuchar las preguntas.
 ### Twilio Voice
 
 - Twilio cobra normalmente **por minuto de llamada** (según país y tipo de llamada).
-- Puedes empezar en **modo trial** (crédito limitado) para probar.
+- Puedes empezar en **modo trial** (crédito limitado) para probar, pero **Twilio no es 100% gratuito** para llamadas reales.
 - Ver precios actuales en “Programmable Voice Pricing” de Twilio:
   - `https://www.twilio.com/voice/pricing`
 
@@ -159,4 +172,24 @@ El repo deja variables `AI_SERVICE_URL` y `AI_SERVICE_API_KEY` para conectar un 
   - `https://tu-dominio/twilio/voice-webhook`
 - Activar validación de firma Twilio (recomendado):
   - `TWILIO_VALIDATE_SIGNATURE=true`
+
+## 9) Modo pruebas 100% gratis (sin Twilio)
+
+Si quieres probar ya el flujo sin pagar nada, usa el endpoint local:
+
+- `POST http://localhost:4000/debug/chat`
+
+Ejemplo de body:
+
+```json
+{ "callId": "test1", "text": "1" }
+```
+
+Luego envías más turnos con el mismo `callId`:
+
+```json
+{ "callId": "test1", "text": "cotización" }
+```
+
+Esto te permite validar el flujo y que la integración con la API funcione, sin llamadas reales.
 

@@ -1,6 +1,7 @@
 import type { AppointmentType, AppointmentStatus } from '../models/appointments.js';
 
 export type ConversationStep =
+  | 'askLanguage'
   | 'greeting'
   | 'askType'
   | 'askCustomer'
@@ -36,7 +37,7 @@ export function createInitialState(callId: string): ConversationState {
   return {
     callId,
     language: 'es',
-    step: 'greeting',
+    step: 'askLanguage',
     type: null,
     customerId: null,
     customerNameSpoken: null,

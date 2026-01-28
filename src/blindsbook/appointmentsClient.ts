@@ -26,3 +26,37 @@ export async function createAppointment(
   return response.data;
 }
 
+type CustomersListResponse = {
+  success: boolean;
+  data?: {
+    customers?: Array<{
+      id: number;
+      firstName?: string | null;
+      lastName?: string | null;
+      companyName?: string | null;
+      email?: string | null;
+      phone?: string | null;
+    }>;
+    count?: number;
+    page?: number;
+    pageSize?: number;
+    total?: number;
+    totalPages?: number;
+  };
+};
+
+export async function findCustomerIdBySearch(
+  search: string,
+): Promise<number | null> {
+  const term = search.trim();
+  if (!term) return null;
+
+  const response = await api.get<CustomersListResponse>('/customers', {
+    params: { search: term, page: 1, pageSize: 5 },
+  });
+
+  const customers = response.data?.data?.customers ?? [];
+  if (customers.length === 0) return null;
+  return customers[0]!.id;
+}
+
