@@ -9,6 +9,11 @@ export interface EnvConfig {
   twilioNumberToCompanyMap: Map<string, { token: string; companyId: number }>;
   aiServiceUrl: string | null;
   aiServiceApiKey: string | null;
+  publicBaseUrl: string | null;
+  azureSpeechKey: string | null;
+  azureSpeechRegion: string | null;
+  azureTtsVoiceEs: string | null;
+  azureTtsVoiceEn: string | null;
 }
 
 export function loadEnv(): EnvConfig {
@@ -41,6 +46,15 @@ export function loadEnv(): EnvConfig {
   const aiServiceUrl = process.env.AI_SERVICE_URL || null;
   const aiServiceApiKey = process.env.AI_SERVICE_API_KEY || null;
 
+  // Para que Twilio pueda hacer GET a /tts/... desde internet (ngrok/azure)
+  const publicBaseUrl = process.env.PUBLIC_BASE_URL || null;
+
+  // Azure Speech (TTS neuronal)
+  const azureSpeechKey = process.env.AZURE_SPEECH_KEY || null;
+  const azureSpeechRegion = process.env.AZURE_SPEECH_REGION || null;
+  const azureTtsVoiceEs = process.env.AZURE_TTS_VOICE_ES || null;
+  const azureTtsVoiceEn = process.env.AZURE_TTS_VOICE_EN || null;
+
   return {
     port,
     twilioAuthToken,
@@ -53,6 +67,11 @@ export function loadEnv(): EnvConfig {
     twilioNumberToCompanyMap,
     aiServiceUrl,
     aiServiceApiKey,
+    publicBaseUrl,
+    azureSpeechKey,
+    azureSpeechRegion,
+    azureTtsVoiceEs,
+    azureTtsVoiceEn,
   };
 }
 

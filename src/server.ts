@@ -5,6 +5,7 @@ import { handleUserInput, setConversationState, clearConversationState } from '.
 import { loadEnv } from './config/env.js';
 import { setTokenForCompany, clearTokenOverride, createAppointment } from './blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from './models/appointments.js';
+import { getAudio } from './tts/ttsCache.js';
 
 export async function startServer() {
   const app = express();
@@ -16,6 +17,19 @@ export async function startServer() {
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, service: 'receptionist-ai', status: 'healthy' });
+  });
+
+  // Audio TTS temporal (para Twilio <Play/>). Se llena desde el webhook al sintetizar.
+  app.get('/tts/:id.mp3', (req, res) => {
+    const id = String(req.params.id || '');
+    const audio = getAudio(id);
+    if (!audio) {
+      res.status(404).send('not_found');
+      return;
+    }
+    res.setHeader('Content-Type', audio.contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(audio.bytes);
   });
 
   // Modo 100% local/gratis (sin Twilio): simula turnos de conversación.

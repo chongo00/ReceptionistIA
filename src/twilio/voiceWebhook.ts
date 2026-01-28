@@ -5,6 +5,8 @@ import { loadEnv } from '../config/env.js';
 import { createAppointment } from '../blindsbook/appointmentsClient.js';
 import { setTokenForCompany, clearTokenOverride } from '../blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from '../models/appointments.js';
+import { putAudio } from '../tts/ttsCache.js';
+import { isAzureTtsConfigured, synthesizeAzureMp3 } from '../tts/azureNeuralTts.js';
 
 export const twilioVoiceRouter = express.Router();
 
@@ -92,13 +94,41 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
       language: twilioLang,
     });
 
-    gather.say(
-      {
-        language: twilioLang,
-        voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
-      } as any,
-      replyText,
-    );
+    // Voz neuronal con Azure (si está configurado + tenemos PUBLIC_BASE_URL)
+    // Si no, fallback al Say de Twilio (sintética).
+    const canUseAzure =
+      isAzureTtsConfigured() && Boolean(env.publicBaseUrl && env.publicBaseUrl.startsWith('http'));
+
+    if (canUseAzure) {
+      try {
+        const { bytes, contentType } = await synthesizeAzureMp3(
+          replyText,
+          state.language === 'en' ? 'en' : 'es',
+        );
+        const id = putAudio(bytes, contentType, 10 * 60);
+        const base = String(env.publicBaseUrl).replace(/\/$/, '');
+        const audioUrl = `${base}/tts/${id}.mp3`;
+        gather.play({}, audioUrl);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Azure TTS falló; usando Twilio <Say> fallback:', e);
+        gather.say(
+          {
+            language: twilioLang,
+            voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
+          } as any,
+          replyText,
+        );
+      }
+    } else {
+      gather.say(
+        {
+          language: twilioLang,
+          voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
+        } as any,
+        replyText,
+      );
+    }
 
     if (isFinished) {
       clearConversationState(callId);
