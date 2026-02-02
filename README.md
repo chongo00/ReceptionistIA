@@ -90,4 +90,3 @@ Puedes extender `src/dialogue/manager.ts` para usar un servicio de IA externo (`
 |-----------|------------|
 | [docs/GUIA_COMPLETA.md](docs/GUIA_COMPLETA.md) | Guía paso a paso: voz neuronal (Azure Speech), Twilio, ngrok, costos, despliegue en Azure, troubleshooting. |
 | [docs/Ia.md](docs/Ia.md) | Alternativas con N8N + Ollama/Gemini (100% gratis): recepcionista IA con Google Calendar. |
-
