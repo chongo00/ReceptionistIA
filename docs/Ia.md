@@ -1,10 +1,6 @@
-Excelente, ahora tengo toda la información de investigación completa. Voy a crear la respuesta final profesional y completa.
-
-***
-
 # GUÍA PROFESIONAL: RECEPCIONISTA IA PARA GESTIÓN DE CITAS CON N8N (100% GRATIS)
 
-He compilado una guía exhaustiva basada en las mejores prácticas actuales de 2025. Aquí te presento todo lo que necesitas para construir tu propia recepcionista de IA completamente funcional, sin costos iniciales.
+Guía exhaustiva para construir una recepcionista de IA con Ollama/n8n/Google Calendar (alternativas gratuitas). Complementa el servicio Twilio + Azure de este repo.
 
 ## OPCIONES DE CONFIGURACIÓN: ELIGE LA TUYA
 
@@ -357,16 +353,6 @@ Mi Recepcionista/
 | **Solución comercial** | $500+ | $100+/mes | Alta |
 
 **Conclusión**: Comienzas con $0, escalas sin costos si usas Ollama, o pasas a $25/mes si necesitas cloud.
-
-***
-
-He guardado dos documentos detallados en tu workspace con:
-1. **Guía completa paso a paso** con configuración detallada para cada tipo de negocio (clínicas, salones, oficinas)
-2. **Prompts listos para copiar/pegar** específicos para tu industria, plus configuración JSON de herramientas
-
-Estos documentos incluyen ejemplos completos de conversaciones, flujos de validación, y troubleshooting específico basado en 50+ fuentes de 2025. Todo está diseñado para que puedas implementarlo sin experiencia previa en AI.
-
-**Mi recomendación**: Comienza con la opción Gemini Cloud (30 minutos, sin instalaciones) para validar que el concepto funciona en tu negocio. Después, si necesitas privacidad total y escalabilidad ilimitada, migra a Ollama local.[1][2][3][4][5]
 
 [1](https://www.youtube.com/watch?v=0CRGWE-byhE)
 [2](https://www.youtube.com/watch?v=hE9GpZvI3Ik)

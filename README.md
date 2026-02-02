@@ -4,17 +4,24 @@ Servicio Node.js (TypeScript) que actúa como **recepcionista telefónica con IA
 
 ## Estructura del proyecto
 
-- `package.json` – scripts (`dev`, `build`, `start`) y dependencias.
-- `tsconfig.json` – configuración de TypeScript.
-- `.env.example` – variables de entorno necesarias.
-- `src/index.ts` – punto de entrada.
-- `src/server.ts` – servidor HTTP Express y registro de rutas.
-- `src/config/env.ts` – carga de configuración desde variables de entorno.
-- `src/twilio/voiceWebhook.ts` – webhook principal que Twilio llama en cada interacción de la llamada.
-- `src/dialogue/state.ts` – definición del estado de conversación.
-- `src/dialogue/manager.ts` – lógica de flujo (qué se pregunta, cómo se avanza).
-- `src/blindsbook/appointmentsClient.ts` – cliente HTTP hacia la API de BlindsBook (`/appointments`).
-- `src/models/appointments.ts` – tipos de la cita compatibles con el backend actual.
+```
+├── docs/
+│   ├── GUIA_COMPLETA.md   # Voz neuronal, Twilio, Azure, costos, despliegue
+│   └── Ia.md              # Alternativas N8N + Ollama/Gemini (gratis)
+├── scripts/               # test_chat.ps1, validar_citas.sql
+├── src/
+│   ├── index.ts           # Punto de entrada
+│   ├── server.ts          # Express y rutas
+│   ├── config/env.ts      # Variables de entorno
+│   ├── twilio/voiceWebhook.ts  # Webhook Twilio
+│   ├── dialogue/          # state.ts, manager.ts (flujo conversación)
+│   ├── blindsbook/appointmentsClient.ts  # API BlindsBook /appointments
+│   ├── models/appointments.ts
+│   └── tts/               # Azure Neural TTS, caché
+├── package.json
+├── tsconfig.json
+└── .env.example
+```
 
 ## Requisitos
 
@@ -25,7 +32,7 @@ Servicio Node.js (TypeScript) que actúa como **recepcionista telefónica con IA
 ## Instalación
 
 ```bash
-cd "D:\Disco E trabajos\Crear IA de recepcionista"
+cd "Receptionist IA"   # o la ruta donde clonaste el repo
 npm install
 ```
 
@@ -74,4 +81,13 @@ En esta primera versión el flujo conversacional:
 - Llama a la API de BlindsBook para crear la cita.
 
 Puedes extender `src/dialogue/manager.ts` para usar un servicio de IA externo (`AI_SERVICE_URL`) que interprete mejor las frases del cliente (extracción de fechas, nombres, etc.) y complete los campos necesarios respetando las reglas de negocio de BlindsBook.
+
+---
+
+## Documentación
+
+| Documento | Contenido |
+|-----------|------------|
+| [docs/GUIA_COMPLETA.md](docs/GUIA_COMPLETA.md) | Guía paso a paso: voz neuronal (Azure Speech), Twilio, ngrok, costos, despliegue en Azure, troubleshooting. |
+| [docs/Ia.md](docs/Ia.md) | Alternativas con N8N + Ollama/Gemini (100% gratis): recepcionista IA con Google Calendar. |
 
