@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BlindsBook — Prueba de Voz IA Recepcionista</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --text:#e2e8f0; --mute:#94a3b8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:20px; }
+  h1 { font-size:1.5rem; margin-bottom:4px; }
+  .subtitle { color:var(--mute); font-size:.85rem; margin-bottom:20px; }
+  .panel { background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:720px; margin-bottom:16px; }
+  .panel h2 { font-size:1rem; margin-bottom:12px; color:var(--accent); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  label { font-size:.85rem; color:var(--mute); min-width:90px; }
+  select, input[type=text] { background:#334155; border:1px solid #475569; color:var(--text); padding:8px 12px; border-radius:8px; font-size:.9rem; }
+  select { min-width:200px; }
+  input[type=text] { flex:1; min-width:200px; }
+  .btn { border:none; padding:10px 24px; border-radius:8px; font-size:.95rem; font-weight:600; cursor:pointer; transition:all .2s; display:inline-flex; align-items:center; gap:8px; }
+  .btn-primary { background:var(--accent); color:#fff; }
+  .btn-primary:hover { background:#2563eb; }
+  .btn-record { background:var(--green); color:#fff; font-size:1.1rem; padding:14px 32px; }
+  .btn-record.recording { background:var(--red); animation:pulse 1s infinite; }
+  .btn-stop { background:var(--red); color:#fff; }
+  .btn-sm { padding:6px 14px; font-size:.8rem; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+  .controls { display:flex; gap:12px; justify-content:center; margin:16px 0; }
+  .transcript { max-height:420px; overflow-y:auto; padding:8px 0; }
+  .msg { margin-bottom:12px; padding:10px 14px; border-radius:10px; max-width:90%; line-height:1.5; font-size:.9rem; }
+  .msg.user { background:#334155; margin-left:auto; text-align:right; border-bottom-right-radius:2px; }
+  .msg.ia { background:#1a3a5c; border-bottom-left-radius:2px; }
+  .msg .meta { font-size:.7rem; color:var(--mute); margin-top:4px; }
+  .status { text-align:center; padding:8px; font-size:.85rem; border-radius:8px; }
+  .status.listening { background:#14532d; color:#4ade80; }
+  .status.speaking { background:#1e3a5f; color:#60a5fa; }
+  .status.idle { background:#334155; color:var(--mute); }
+  .status.error { background:#450a0a; color:#fca5a5; }
+  .state-bar { display:flex; gap:8px; flex-wrap:wrap; font-size:.75rem; margin-top:8px; }
+  .state-bar .chip { background:#334155; padding:3px 8px; border-radius:4px; }
+  .state-bar .chip b { color:var(--accent); }
+  .mode-toggle { display:flex; gap:0; border-radius:8px; overflow:hidden; border:1px solid #475569; }
+  .mode-toggle button { background:#334155; color:var(--mute); border:none; padding:8px 16px; cursor:pointer; font-size:.85rem; }
+  .mode-toggle button.active { background:var(--accent); color:#fff; }
+  #textInput { display:none; }
+  #textInput.active { display:flex; }
+  .info { background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px; font-size:.8rem; color:var(--mute); line-height:1.6; }
+  .info b { color:var(--text); }
+</style>
+</head>
+<body>
+
+<h1>🎙️ BlindsBook — IA Recepcionista</h1>
+<p class="subtitle">Prueba de voz en tiempo real — Habla por micrófono o escribe</p>
+
+<!-- CONFIG -->
+<div class="panel">
+  <h2>⚙️ Configuración</h2>
+  <div class="row">
+    <label>Compañía:</label>
+    <select id="companySelect">
+      <option value="">— Sin seleccionar (token por defecto) —</option>
+      <option value="+15550000001" selected>Compañía 387 — karla1@blindsbook.com</option>
+      <option value="+15550000002">Compañía 2 — adortax76@hotmail.com</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Servidor:</label>
+    <input type="text" id="serverUrl" value="http://localhost:4000" />
+  </div>
+  <div class="row">
+    <label>Caller ID:</label>
+    <input type="text" id="callerPhone" value="+15551234567" placeholder="+1XXXXXXXXXX (simula From)" />
+  </div>
+  <div class="row">
+    <label>Modo:</label>
+    <div class="mode-toggle">
+      <button id="modeVoice" class="active" onclick="setMode('voice')">🎤 Voz</button>
+      <button id="modeText" onclick="setMode('text')">⌨️ Texto</button>
+    </div>
+    <button class="btn btn-sm btn-primary" onclick="resetConversation()">🔄 Nueva conversación</button>
+  </div>
+</div>
+
+<!-- STATUS -->
+<div class="panel">
+  <div id="status" class="status idle">Listo — Presiona el botón para hablar</div>
+  <div class="state-bar" id="stateBar"></div>
+</div>
+
+<!-- CONTROLS -->
+<div class="panel">
+  <div class="controls" id="voiceControls">
+    <button class="btn btn-record" id="btnRecord" onclick="toggleRecording()">
+      🎤 Mantén presionado para hablar
+    </button>
+  </div>
+  <div class="row" id="textInput">
+    <input type="text" id="txtMsg" placeholder="Escribe tu mensaje..." onkeydown="if(event.key==='Enter')sendText()" />
+    <button class="btn btn-primary btn-sm" onclick="sendText()">Enviar</button>
+  </div>
+</div>
+
+<!-- TRANSCRIPT -->
+<div class="panel">
+  <h2>💬 Conversación</h2>
+  <div class="transcript" id="transcript"></div>
+</div>
+
+<!-- INFO -->
+<div class="panel info">
+  <b>¿Cómo funciona?</b><br>
+  1. Selecciona la <b>compañía</b> (determina qué clientes y citas se gestionan).<br>
+  2. Presiona <b>🎤</b> y habla (usa el micrófono del navegador para convertir voz a texto).<br>
+  3. El texto se envía a <b>/debug/voice-chat</b> → la IA procesa el diálogo → genera audio con <b>Piper TTS</b>.<br>
+  4. El audio se reproduce automáticamente — escucharás la respuesta de la recepcionista.<br>
+  5. Repite hasta completar la cita.<br><br>
+  <b>Requisitos:</b> Chrome o Edge (Web Speech API). Micrófono activo. Servicios en puertos 4000 + 8000.
+</div>
+
+<script>
+const API = () => document.getElementById('serverUrl').value.replace(/\/$/,'');
+let callId = 'voice-' + Date.now();
+let mode = 'voice';
+let recognition = null;
+let isRecording = false;
+let isPlaying = false;
+let currentAudio = null;
+
+// ─── Web Speech API (STT del navegador — gratis) ───
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SpeechRecognition) {
+  document.getElementById('status').textContent = '⚠️ Tu navegador no soporta Web Speech API. Usa Chrome o Edge.';
+  document.getElementById('status').className = 'status error';
+  document.getElementById('btnRecord').disabled = true;
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeVoice').className = m==='voice'?'active':'';
+  document.getElementById('modeText').className = m==='text'?'active':'';
+  document.getElementById('voiceControls').style.display = m==='voice'?'flex':'none';
+  document.getElementById('textInput').className = m==='text'?'row active':'row';
+  if (m==='text') document.getElementById('txtMsg').focus();
+}
+
+function resetConversation() {
+  callId = 'voice-' + Date.now();
+  document.getElementById('transcript').innerHTML = '';
+  updateState(null);
+  setStatus('idle', 'Nueva conversación iniciada');
+  // Trigger initial greeting
+  sendToServer(null);
+}
+
+function getToNumber() {
+  return document.getElementById('companySelect').value || null;
+}
+
+// ─── Recording ───
+function toggleRecording() {
+  if (isPlaying) return; // don't record while IA is speaking
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+function startRecording() {
+  if (!SpeechRecognition) return;
+  
+  recognition = new SpeechRecognition();
+  recognition.lang = 'es-ES'; // Start with Spanish, auto-detects somewhat
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.continuous = false;
+  
+  recognition.onresult = (event) => {
+    const text = event.results[0][0].transcript;
+    const confidence = event.results[0][0].confidence;
+    addMessage('user', text, `Confianza: ${(confidence*100).toFixed(0)}%`);
+    sendToServer(text);
+  };
+  
+  recognition.onerror = (event) => {
+    console.warn('Speech error:', event.error);
+    if (event.error === 'no-speech') {
+      setStatus('idle', 'No se detectó voz — intenta de nuevo');
+    } else if (event.error === 'not-allowed') {
+      setStatus('error', '⚠️ Permiso de micrófono denegado. Permite el acceso en tu navegador.');
+    } else {
+      setStatus('error', `Error de reconocimiento: ${event.error}`);
+    }
+    isRecording = false;
+    updateRecordButton();
+  };
+  
+  recognition.onend = () => {
+    isRecording = false;
+    updateRecordButton();
+  };
+  
+  try {
+    recognition.start();
+    isRecording = true;
+    updateRecordButton();
+    setStatus('listening', '🎤 Escuchando... Habla ahora');
+  } catch(e) {
+    setStatus('error', 'No se pudo iniciar el micrófono: ' + e.message);
+  }
+}
+
+function stopRecording() {
+  if (recognition) {
+    recognition.stop();
+  }
+  isRecording = false;
+  updateRecordButton();
+}
+
+function updateRecordButton() {
+  const btn = document.getElementById('btnRecord');
+  if (isRecording) {
+    btn.className = 'btn btn-record recording';
+    btn.innerHTML = '🔴 Escuchando... (click para detener)';
+  } else if (isPlaying) {
+    btn.className = 'btn btn-record';
+    btn.innerHTML = '🔊 IA hablando...';
+    btn.disabled = true;
+  } else {
+    btn.className = 'btn btn-record';
+    btn.innerHTML = '🎤 Presiona para hablar';
+    btn.disabled = false;
+  }
+}
+
+// ─── Text mode ───
+function sendText() {
+  const input = document.getElementById('txtMsg');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMessage('user', text);
+  sendToServer(text);
+}
+
+// ─── Server communication ───
+async function sendToServer(text) {
+  setStatus('speaking', '⏳ Procesando...');
+  
+  const body = { callId, text, toNumber: getToNumber(), fromNumber: document.getElementById('callerPhone').value || null };
+  
+  try {
+    const resp = await fetch(API() + '/debug/voice-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    
+    const data = await resp.json();
+    
+    const meta = `Step: ${data.state.step} | TTS: ${data.ttsProvider}`;
+    addMessage('ia', data.replyText, meta);
+    updateState(data.state);
+    
+    // Play audio
+    if (data.audioBase64) {
+      await playAudioBase64(data.audioBase64);
+    } else {
+      setStatus('idle', 'Sin audio TTS — respuesta solo texto');
+    }
+    
+    if (data.isFinished) {
+      addMessage('ia', '✅ Conversación finalizada. Presiona "Nueva conversación" para empezar otra.', 'Sistema');
+      setStatus('idle', '✅ Cita gestionada — conversación terminada');
+    }
+    
+  } catch(err) {
+    setStatus('error', '❌ Error: ' + err.message);
+    addMessage('ia', '⚠️ Error al contactar el servidor: ' + err.message, 'Error');
+  }
+}
+
+// ─── Audio playback ───
+function playAudioBase64(b64) {
+  return new Promise((resolve) => {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+    
+    const audioSrc = 'data:audio/mpeg;base64,' + b64;
+    const audio = new Audio(audioSrc);
+    currentAudio = audio;
+    isPlaying = true;
+    updateRecordButton();
+    setStatus('speaking', '🔊 IA hablando...');
+    
+    audio.onended = () => {
+      isPlaying = false;
+      currentAudio = null;
+      updateRecordButton();
+      setStatus('idle', 'Tu turno — presiona 🎤 para hablar');
+      resolve();
+    };
+    
+    audio.onerror = (e) => {
+      console.warn('Audio playback error:', e);
+      isPlaying = false;
+      currentAudio = null;
+      updateRecordButton();
+      setStatus('idle', 'Audio no reproducido — tu turno');
+      resolve();
+    };
+    
+    audio.play().catch(err => {
+      console.warn('Autoplay blocked:', err);
+      isPlaying = false;
+      updateRecordButton();
+      setStatus('idle', '⚠️ Click en la página primero (autoplay bloqueado) — tu turno');
+      resolve();
+    });
+  });
+}
+
+// ─── UI helpers ───
+function addMessage(role, text, meta) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = text.replace(/\n/g, '<br>');
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = meta;
+    div.appendChild(m);
+  }
+  const container = document.getElementById('transcript');
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function setStatus(cls, text) {
+  const el = document.getElementById('status');
+  el.className = 'status ' + cls;
+  el.textContent = text;
+}
+
+function updateState(state) {
+  const bar = document.getElementById('stateBar');
+  if (!state) { bar.innerHTML = ''; return; }
+  bar.innerHTML = [
+    `<span class="chip"><b>Step:</b> ${state.step}</span>`,
+    `<span class="chip"><b>Lang:</b> ${state.language}</span>`,
+    state.callerPhone ? `<span class="chip"><b>From:</b> ${state.callerPhone}</span>` : '',
+    state.type !== null ? `<span class="chip"><b>Tipo:</b> ${['Cotización','Instalación','Reparación'][state.type]}</span>` : '',
+    state.customerId ? `<span class="chip"><b>ClienteID:</b> ${state.customerId}</span>` : '',
+    state.customerConfirmedName ? `<span class="chip"><b>Cliente:</b> ${state.customerConfirmedName}</span>` :
+      state.customerNameSpoken ? `<span class="chip"><b>Cliente:</b> ${state.customerNameSpoken}</span>` : '',
+    state.identificationAttempts > 0 ? `<span class="chip"><b>Intentos:</b> ${state.identificationAttempts}/3</span>` : '',
+    state.startDateISO ? `<span class="chip"><b>Fecha:</b> ${new Date(state.startDateISO).toLocaleString('es-ES')}</span>` : '',
+    state.duration ? `<span class="chip"><b>Duración:</b> ${state.duration}</span>` : '',
+  ].filter(Boolean).join('');
+}
+
+// ─── Init: get first greeting ───
+window.addEventListener('load', () => {
+  sendToServer(null);
+});
+</script>
+</body>
+</html>

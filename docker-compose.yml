@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # -- BlindsBook IA - CallCenter (Node.js) --
+  blindsbook-ia:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - BLINDSBOOK_API_BASE_URL=${BLINDSBOOK_API_BASE_URL:-http://host.docker.internal:3000}
+      - BLINDSBOOK_API_TOKEN=${BLINDSBOOK_API_TOKEN:-}
+      - BLINDSBOOK_LOGIN_EMAIL=${BLINDSBOOK_LOGIN_EMAIL:-}
+      - BLINDSBOOK_LOGIN_PASSWORD=${BLINDSBOOK_LOGIN_PASSWORD:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_NUMBER_TO_COMPANY_MAP=${TWILIO_NUMBER_TO_COMPANY_MAP:-}
+      - TWILIO_VALIDATE_SIGNATURE=false
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:4000}
+      - DOCKER_TTS_URL=http://blindsbook-tts:8000
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
+      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
+    depends_on:
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  # -- Ollama + Qwen2.5-3B (modelo pre-cargado en la imagen) --
+  ollama:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama-preloaded
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    restart: unless-stopped
+
+  # -- Piper TTS (descomentar si quieres incluirlo en este compose) --
+  # blindsbook-tts:
+  #   image: blindsbook-ia:latest
+  #   ports:
+  #     - "8000:8000"
+  #   restart: unless-stopped
+
+volumes:
+  ollama_data:

@@ -14,6 +14,12 @@ export interface EnvConfig {
   azureSpeechRegion: string | null;
   azureTtsVoiceEs: string | null;
   azureTtsVoiceEn: string | null;
+  /** URL del contenedor Docker BlindsBook-IA (Piper TTS + OCR). Ej: http://localhost:8000 */
+  dockerTtsUrl: string | null;
+  /** URL de Ollama (Mini LLM local). Ej: http://localhost:11434 */
+  ollamaUrl: string | null;
+  /** Modelo de Ollama a usar. Ej: qwen2.5:3b */
+  ollamaModel: string;
 }
 
 export function loadEnv(): EnvConfig {
@@ -55,6 +61,13 @@ export function loadEnv(): EnvConfig {
   const azureTtsVoiceEs = process.env.AZURE_TTS_VOICE_ES || null;
   const azureTtsVoiceEn = process.env.AZURE_TTS_VOICE_EN || null;
 
+  // Docker BlindsBook-IA (Piper TTS local, OCR, STT)
+  const dockerTtsUrl = process.env.DOCKER_TTS_URL || null;
+
+  // Ollama (Mini LLM local para identificación de clientes)
+  const ollamaUrl = process.env.OLLAMA_URL || null;
+  const ollamaModel = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+
   return {
     port,
     twilioAuthToken,
@@ -72,6 +85,9 @@ export function loadEnv(): EnvConfig {
     azureSpeechRegion,
     azureTtsVoiceEs,
     azureTtsVoiceEn,
+    dockerTtsUrl,
+    ollamaUrl,
+    ollamaModel,
   };
 }
 

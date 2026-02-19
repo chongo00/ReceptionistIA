@@ -1,0 +1,12 @@
+FROM ollama/ollama:latest
+
+# Iniciar ollama en background, descargar modelo, y parar
+RUN ollama serve & \
+    sleep 5 && \
+    ollama pull qwen2.5:3b && \
+    sleep 2 && \
+    kill %1
+
+EXPOSE 11434
+ENTRYPOINT ["/bin/ollama"]
+CMD ["serve"]

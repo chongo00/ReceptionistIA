@@ -1,12 +1,12 @@
 import express from 'express';
 import twilio from 'twilio';
-import { handleUserInput, setConversationState, clearConversationState } from '../dialogue/manager.js';
+import { handleUserInput, getConversationState, setConversationState, clearConversationState } from '../dialogue/manager.js';
 import { loadEnv } from '../config/env.js';
 import { createAppointment } from '../blindsbook/appointmentsClient.js';
 import { setTokenForCompany, clearTokenOverride } from '../blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from '../models/appointments.js';
 import { putAudio } from '../tts/ttsCache.js';
-import { isAzureTtsConfigured, synthesizeAzureMp3 } from '../tts/azureNeuralTts.js';
+import { synthesizeTts } from '../tts/ttsProvider.js';
 
 export const twilioVoiceRouter = express.Router();
 
@@ -31,12 +31,17 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
     clearTokenOverride();
   }
 
-  // Para este esqueleto usamos SpeechResult si existe, si no Digits, si no null.
-  let userText = speechResult || digits;
-  // Si el sistema está preguntando por el cliente y no hay input, intentamos usar Caller ID.
-  if (!userText && fromNumber) {
-    userText = fromNumber;
+  // Guardar Caller ID (From) en el state para identificación automática
+  if (fromNumber) {
+    const existingState = getConversationState(callId);
+    if (!existingState.callerPhone) {
+      existingState.callerPhone = fromNumber;
+      setConversationState(callId, existingState);
+    }
   }
+
+  // SpeechResult si existe, si no Digits, si no null
+  const userText = speechResult || digits || null;
 
   const voiceResponse = new twilio.twiml.VoiceResponse();
 
@@ -94,24 +99,35 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
       language: twilioLang,
     });
 
-    // Voz neuronal con Azure (si está configurado + tenemos PUBLIC_BASE_URL)
-    // Si no, fallback al Say de Twilio (sintética).
-    const canUseAzure =
-      isAzureTtsConfigured() && Boolean(env.publicBaseUrl && env.publicBaseUrl.startsWith('http'));
+    // Voz neuronal con TTS unificado (Docker Piper → Azure → Twilio Say fallback)
+    const canUseTts = Boolean(env.publicBaseUrl && env.publicBaseUrl.startsWith('http'));
 
-    if (canUseAzure) {
+    if (canUseTts) {
       try {
-        const { bytes, contentType } = await synthesizeAzureMp3(
+        const ttsResult = await synthesizeTts(
           replyText,
           state.language === 'en' ? 'en' : 'es',
         );
-        const id = putAudio(bytes, contentType, 10 * 60);
-        const base = String(env.publicBaseUrl).replace(/\/$/, '');
-        const audioUrl = `${base}/tts/${id}.mp3`;
-        gather.play({}, audioUrl);
+        if (ttsResult) {
+          const id = putAudio(ttsResult.bytes, ttsResult.contentType, 10 * 60);
+          const base = String(env.publicBaseUrl).replace(/\/$/, '');
+          const audioUrl = `${base}/tts/${id}.mp3`;
+          gather.play({}, audioUrl);
+          // eslint-disable-next-line no-console
+          console.log(`[TTS] Usando proveedor: ${ttsResult.provider}`);
+        } else {
+          // Ningún proveedor disponible
+          gather.say(
+            {
+              language: twilioLang,
+              voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
+            } as any,
+            replyText,
+          );
+        }
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.warn('Azure TTS falló; usando Twilio <Say> fallback:', e);
+        console.warn('TTS falló; usando Twilio <Say> fallback:', e);
         gather.say(
           {
             language: twilioLang,
