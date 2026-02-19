@@ -11,6 +11,7 @@ import type { CreateAppointmentPayload } from './models/appointments.js';
 import { getAudio } from './tts/ttsCache.js';
 import { synthesizeTts } from './tts/ttsProvider.js';
 import { isOllamaAvailable } from './llm/ollamaClient.js';
+import { detectWindowFrame } from './ocr/windowFrameDetector.js';
 
 export async function startServer() {
   const app = express();
@@ -18,7 +19,7 @@ export async function startServer() {
 
   // Twilio envía datos como application/x-www-form-urlencoded por defecto
   app.use(bodyParser.urlencoded({ extended: false }));
-  app.use(bodyParser.json());
+  app.use(bodyParser.json({ limit: '20mb' })); // 20 MB para imágenes OCR en base64
   app.use(cors()); // CORS abierto para pruebas locales
 
   // Servir páginas estáticas (ej. /test/voice-test.html)
@@ -217,6 +218,29 @@ export async function startServer() {
       console.warn('play-audio TTS error:', err);
     }
     res.status(503).json({ error: 'No TTS provider available' });
+  });
+
+  // ──────────── OCR: /ocr/window-frame ────────────
+  // Detección de marco de ventana para la app Drapery Calculator.
+  // POST { image: "data:image/...;base64,...", width: number, height: number }
+  // → { rectangle: { topLeft, topRight, bottomLeft, bottomRight, width, height }, confidence }
+  app.post('/ocr/window-frame', async (req, res) => {
+    const { image, width, height } = req.body ?? {};
+    if (!image || typeof image !== 'string' || !width || !height) {
+      res.status(400).json({ error: 'missing_fields', message: 'Required: image (base64), width, height' });
+      return;
+    }
+    try {
+      const result = await detectWindowFrame(image, Number(width), Number(height));
+      if (!result) {
+        res.json({ error: 'no_window', message: 'No window frame detected' });
+        return;
+      }
+      res.json(result);
+    } catch (err) {
+      console.error('OCR window-frame error:', err);
+      res.status(500).json({ error: 'processing_error', message: 'Failed to process image' });
+    }
   });
 
   app.use('/twilio', twilioVoiceRouter);

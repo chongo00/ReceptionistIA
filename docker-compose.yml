@@ -41,12 +41,14 @@ services:
           memory: 4G
     restart: unless-stopped
 
-  # -- Piper TTS (descomentar si quieres incluirlo en este compose) --
+  # -- Piper TTS (descomentar si se usa TTS local separado) --
   # blindsbook-tts:
-  #   image: blindsbook-ia:latest
+  #   image: blindsbook-tts:latest
   #   ports:
   #     - "8000:8000"
   #   restart: unless-stopped
+  # Nota: El OCR (POST /ocr/window-frame) se sirve desde blindsbook-ia en puerto 4000.
+  # La app Drapery Calculator apunta a VITE_BLINDSBOOK_IA_URL=http://localhost:4000
 
 volumes:
   ollama_data:

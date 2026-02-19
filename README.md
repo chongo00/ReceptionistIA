@@ -1,24 +1,27 @@
-# BlindsBook IA – Recepcionista Telefónica con IA
+# BlindsBook IA – Recepcionista Telefónica + OCR Window Detection
 
-Servicio Node.js (TypeScript) que actúa como **recepcionista telefónica inteligente** para gestionar citas de BlindsBook. Atiende llamadas entrantes desde Twilio, identifica al cliente automáticamente, guía la conversación por voz y crea el `appointment` en la API de BlindsBook.
+Servicio Node.js (TypeScript) que actúa como **plataforma central de IA para BlindsBook**, con dos funcionalidades principales:
+
+1. **Recepcionista telefónica** — Atiende llamadas entrantes desde Twilio, identifica al cliente automáticamente (cascada de 3 niveles), guía la conversación por voz y crea citas en la API de BlindsBook.
+2. **OCR / Window Frame Detection** — Endpoint `POST /ocr/window-frame` que recibe fotos de ventanas y devuelve las coordenadas del marco detectado. Usado por la app [Drapery Calculator](../AppBlindsbook%20Drapery-Calculator/Drapery-Calculator-Vue) para calcular medidas de cortinas.
 
 ## Arquitectura
 
 ```
-Llamada entrante
-      │
-   Twilio (STT)
-      │
-  Express API (puerto 4000)
-      │
-  Dialogue Manager
-      ├── Nivel 1: Caller ID →  API BlindsBook (búsqueda directa)
-      ├── Nivel 2: Nombre/teléfono → API BlindsBook (búsqueda + confirmación)
-      └── Nivel 3: LLM fallback → Ollama + Qwen2.5-3B (local, gratis)
-      │
-  TTS (Azure Neural / Piper local / sin voz)
-      │
-   Twilio (responde con <Say> o <Play>)
+              Llamada entrante                      Foto de ventana
+                    │                                     │
+               Twilio (STT)                     Drapery Calculator App
+                    │                                     │
+               ┌────┴─────────── Express API (puerto 4000) ──────────┐
+               │                                                      │
+         Dialogue Manager                              POST /ocr/window-frame
+   ├── Nivel 1: Caller ID                                    │
+   ├── Nivel 2: Nombre/teléfono                      Sharp (edge detection)
+   └── Nivel 3: Ollama (LLM local)                          │
+               │                                     { rectangle, confidence }
+    TTS (Azure / Piper / none)
+               │
+    Twilio (<Say> / <Play>)
 ```
 
 El sistema utiliza una **cascada de identificación de 3 niveles** que reconoce al cliente en ~90 % de los casos sin intervención del LLM, reservando Ollama para los casos ambiguos o complejos.
@@ -51,6 +54,8 @@ El sistema utiliza una **cascada de identificación de 3 niveles** que reconoce 
 │   ├── llm/
 │   │   ├── ollamaClient.ts                 # Cliente Ollama (tool calling)
 │   │   └── identificationAgent.ts          # Agente LLM para identificación nivel 3
+│   ├── ocr/
+│   │   └── windowFrameDetector.ts          # Detección de marco de ventana (Sharp)
 │   ├── tts/
 │   │   ├── ttsProvider.ts                  # Selector TTS: Piper → Azure → none
 │   │   ├── ttsCache.ts                     # Caché temporal de MP3 (10 min)
@@ -172,12 +177,73 @@ Llamada entra
 | Método | Ruta | Descripción |
 |---|---|---|
 | `GET` | `/health` | Estado del servicio y conexión Ollama |
+| `POST` | `/ocr/window-frame` | Detección de marco de ventana (Drapery Calculator) |
 | `POST` | `/twilio/voice-webhook` | Webhook para llamadas entrantes de Twilio |
 | `POST` | `/debug/chat` | Simula turnos de conversación (texto) |
 | `POST` | `/debug/voice-chat` | Simula turnos + devuelve audio TTS |
 | `GET` | `/debug/play-audio?text=...` | Genera y reproduce MP3 directamente |
 | `GET` | `/tts/:id.mp3` | Sirve audio TTS (caché 10 min) |
 | `GET` | `/test/` | UI de prueba en navegador |
+
+---
+
+## OCR — Detección de marco de ventana
+
+Este servicio expone `POST /ocr/window-frame` para la app **Drapery Calculator**. Cuando un usuario toma una foto de una ventana, la app envía la imagen a este endpoint y recibe las coordenadas del marco detectado.
+
+### Cómo funciona
+
+1. Recibe imagen (base64) + dimensiones originales
+2. Redimensiona a max 512px (rendimiento)
+3. Convierte a escala de grises
+4. Aplica detección de bordes (kernel Laplaciano)
+5. Genera histogramas de proyección (filas/columnas)
+6. Identifica los bordes dominantes del marco
+7. Devuelve coordenadas del rectángulo + confianza
+
+### Ejemplo de uso
+
+```bash
+curl -X POST http://localhost:4000/ocr/window-frame \
+  -H "Content-Type: application/json" \
+  -d '{"image":"data:image/jpeg;base64,/9j/4AAQ...","width":1920,"height":1080}'
+```
+
+Respuesta exitosa:
+```json
+{
+  "rectangle": {
+    "topLeft": { "x": 120, "y": 80 },
+    "topRight": { "x": 1800, "y": 80 },
+    "bottomLeft": { "x": 120, "y": 1000 },
+    "bottomRight": { "x": 1800, "y": 1000 },
+    "width": 1680,
+    "height": 920
+  },
+  "confidence": 0.82
+}
+```
+
+Si no detecta marco: `{ "error": "no_window" }`
+
+### Integración con Drapery Calculator
+
+La app Drapery Calculator (`AppBlindsbook Drapery-Calculator/`) usa una cascada de 3 niveles para detección:
+
+| Nivel | Servicio | Configuración |
+|---|---|---|
+| 1 | **BlindsBook-IA** (este servicio) | `VITE_BLINDSBOOK_IA_URL=http://localhost:4000` |
+| 2 | Google Gemini Vision | `VITE_GEMINI_API_KEY` (opcional) |
+| 3 | Hough local (navegador) | Siempre disponible, sin config |
+
+Para probar la integración completa:
+1. Levantar este servicio: `docker compose up -d --build` (o `npm run dev`)
+2. En la carpeta de Drapery Calculator, configurar `.env`:
+   ```
+   VITE_BLINDSBOOK_IA_URL=http://localhost:4000
+   ```
+3. Ejecutar la app Drapery Calculator: `npm run dev` (Ionic serve)
+4. Abrir la pestaña OCR (cámara) y tomar una foto de una ventana
 
 ---
 
