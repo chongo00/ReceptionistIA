@@ -6,7 +6,7 @@ import cors from 'cors';
 import { twilioVoiceRouter } from './twilio/voiceWebhook.js';
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from './dialogue/manager.js';
 import { loadEnv } from './config/env.js';
-import { setTokenForCompany, clearTokenOverride, createAppointment } from './blindsbook/appointmentsClient.js';
+import { setTokenForCompany, clearTokenOverride, createAppointment, initTokenManager } from './blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from './models/appointments.js';
 import { getAudio } from './tts/ttsCache.js';
 import { synthesizeTts } from './tts/ttsProvider.js';
@@ -60,7 +60,7 @@ export async function startServer() {
     // Permite probar multi-tenant en local simulando el número Twilio (To)
     if (toNumber) {
       const cfg = env.twilioNumberToCompanyMap.get(toNumber);
-      if (cfg) setTokenForCompany(cfg.token);
+      if (cfg) setTokenForCompany(cfg);
     } else {
       clearTokenOverride();
     }
@@ -130,7 +130,7 @@ export async function startServer() {
 
     if (toNumber) {
       const cfg = env.twilioNumberToCompanyMap.get(toNumber);
-      if (cfg) setTokenForCompany(cfg.token);
+      if (cfg) setTokenForCompany(cfg);
     } else {
       clearTokenOverride();
     }
@@ -244,6 +244,13 @@ export async function startServer() {
   });
 
   app.use('/twilio', twilioVoiceRouter);
+
+  // ─── Inicializar TokenManager (auto-login + renovación) ───
+  try {
+    await initTokenManager();
+  } catch (err) {
+    console.error('[Auth] Error inicializando TokenManager (continuando sin auto-login):', err);
+  }
 
   const port = Number(process.env.PORT || 4000);
 

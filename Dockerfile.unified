@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────
+# Dockerfile.unified — BlindsBook Receptionist IA + Ollama
+# Un solo contenedor con Node.js app + Ollama + modelo qwen2.5:3b
+# ─────────────────────────────────────────────────────────────
+
+# --- Stage 1: Build Node.js app ---
+FROM node:22-slim AS builder
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --production=false
+
+COPY tsconfig.json ./
+COPY src/ ./src/
+
+RUN npm run build
+
+# --- Stage 2: Runtime con Ollama + Node.js ---
+FROM ubuntu:22.04
+
+# Evitar prompts interactivos durante instalión
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    gnupg \
+    zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Node.js 22
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# --- Copiar app Node.js ---
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist ./dist
+COPY public/ ./public/
+
+# --- Pre-cargar modelo Ollama durante el build ---
+# Esto descarga qwen2.5:3b dentro de la imagen (~2GB)
+# Puede tardar 10-60+ min dependiendo del internet
+RUN ollama serve & \
+    OLLAMA_PID=$! && \
+    echo "Esperando que Ollama inicie..." && \
+    for i in $(seq 1 60); do \
+      curl -sf http://localhost:11434/api/tags > /dev/null 2>&1 && break; \
+      echo "  Intento $i/60..."; \
+      sleep 5; \
+    done && \
+    echo "Ollama listo. Descargando modelo qwen2.5:3b..." && \
+    ollama pull qwen2.5:3b && \
+    echo "Modelo descargado exitosamente." && \
+    kill $OLLAMA_PID && \
+    wait $OLLAMA_PID 2>/dev/null || true
+
+# --- Copiar entrypoint ---
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Exponer puertos: 4000 (Node app) + 11434 (Ollama)
+EXPOSE 4000 11434
+
+# Variables de entorno por defecto
+ENV PORT=4000
+ENV OLLAMA_URL=http://localhost:11434
+ENV OLLAMA_MODEL=qwen2.5:3b
+
+ENTRYPOINT ["/entrypoint.sh"]

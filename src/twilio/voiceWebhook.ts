@@ -23,7 +23,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   // Determinar compañía por número Twilio (To = número que recibió la llamada)
   const companyConfig = toNumber ? env.twilioNumberToCompanyMap.get(toNumber) : null;
   if (companyConfig) {
-    setTokenForCompany(companyConfig.token);
+    setTokenForCompany(companyConfig);
     // eslint-disable-next-line no-console
     console.log(`[Twilio] Usando token para compañía ${companyConfig.companyId} (número: ${toNumber})`);
   } else if (env.blindsbookApiToken) {

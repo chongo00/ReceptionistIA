@@ -1,3 +1,12 @@
+export interface CompanyMapEntry {
+  companyId: number;
+  /** Credenciales para auto-login (recomendado — el token se renueva solo) */
+  email?: string;
+  password?: string;
+  /** Token estático (fallback si no hay credenciales — expira en 24h) */
+  token?: string;
+}
+
 export interface EnvConfig {
   port: number;
   twilioAuthToken: string;
@@ -6,7 +15,7 @@ export interface EnvConfig {
   blindsbookApiToken: string;
   blindsbookLoginEmail: string | null;
   blindsbookLoginPassword: string | null;
-  twilioNumberToCompanyMap: Map<string, { token: string; companyId: number }>;
+  twilioNumberToCompanyMap: Map<string, CompanyMapEntry>;
   aiServiceUrl: string | null;
   aiServiceApiKey: string | null;
   publicBaseUrl: string | null;
@@ -33,13 +42,16 @@ export function loadEnv(): EnvConfig {
   const blindsbookLoginEmail = process.env.BLINDSBOOK_LOGIN_EMAIL || null;
   const blindsbookLoginPassword = process.env.BLINDSBOOK_LOGIN_PASSWORD || null;
 
-  // Mapping: número Twilio → { token, companyId }
-  // Formato JSON: {"+1234567890":{"token":"...","companyId":1},"+0987654321":{"token":"...","companyId":2}}
-  const twilioNumberToCompanyMap = new Map<string, { token: string; companyId: number }>();
+  // Mapping: número Twilio → { companyId, email, password } o { companyId, token }
+  // Formato JSON con credenciales (RECOMENDADO — auto-renueva tokens):
+  //   {"+1234567890":{"companyId":1,"email":"user@co.com","password":"pass"}}
+  // Formato legacy con token estático (expira en 24h):
+  //   {"+1234567890":{"token":"jwt...","companyId":1}}
+  const twilioNumberToCompanyMap = new Map<string, CompanyMapEntry>();
   const mapJson = process.env.TWILIO_NUMBER_TO_COMPANY_MAP;
   if (mapJson) {
     try {
-      const parsed = JSON.parse(mapJson) as Record<string, { token: string; companyId: number }>;
+      const parsed = JSON.parse(mapJson) as Record<string, CompanyMapEntry>;
       for (const [number, config] of Object.entries(parsed)) {
         twilioNumberToCompanyMap.set(number, config);
       }

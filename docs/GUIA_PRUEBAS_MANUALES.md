@@ -24,55 +24,66 @@
 
 ---
 
-## Comandos Docker — Setup Completo
+## Comandos Docker — Setup Completo (Contenedor Unico)
 
-> Ejecutar desde: `D:\Disco E trabajos\repositorio_blindsbook\Receptionist IA`
+> **Arquitectura:** Un solo contenedor Docker con Node.js + Ollama + modelo qwen2.5:3b integrado.
+> **Ejecutar desde:** `D:\Disco E trabajos\repositorio_blindsbook\Receptionist IA`
+> **NOTA:** La primera vez puede tardar 30-90 min si el internet es lento (descarga Node.js, Ollama y modelo ~2GB).
 
 ```bash
-# ── PASO 1: Construir y levantar todos los contenedores ──
-# (La primera vez construira la imagen de Ollama con el modelo pre-cargado, tarda ~5-10 min)
-docker compose up -d --build
+# ── PASO 1: Construir la imagen unificada (Node.js + Ollama + modelo) ──
+# Timeout largo: puede tardar 30-90 min por descarga del modelo qwen2.5:3b (~2GB)
+# Use --progress=plain para ver el progreso detallado del build
+DOCKER_BUILDKIT=1 docker build --progress=plain --no-cache -f Dockerfile.unified -t blindsbook-ia-unified .
 
-# ── PASO 2: Verificar que los contenedores estan corriendo ──
-docker compose ps
-# Deben aparecer: blindsbook-ia y ollama
+# ── PASO 2: Levantar el contenedor unico ──
+docker compose up -d
 
-# ── PASO 3: Health checks ──
-curl http://localhost:4000/health
-# -> {"ok":true,"service":"blindsbook-ia","status":"healthy","ollama":"connected"}
+# ── PASO 3: Ver logs en tiempo real (esperar a que Ollama y Node.js inicien) ──
+docker compose logs -f blindsbook-ia
+# Esperar los mensajes:
+#   [1/3] Iniciando Ollama...
+#   [2/3] Esperando que Ollama responda...
+#        ✓ Ollama listo
+#   [3/3] Iniciando Receptionist IA en puerto 4000...
 
-curl http://localhost:11434/api/tags
-# -> Debe listar qwen2.5:3b (ya viene pre-cargado en la imagen)
+# ── PASO 4: Health checks (en otra terminal, PowerShell) ──
+# NOTA: En PowerShell "curl" es un alias de Invoke-WebRequest. Usar curl.exe o Invoke-RestMethod.
+Invoke-RestMethod http://localhost:4000/health
+# -> ok: true, service: blindsbook-ia, status: healthy, ollama: connected
 
-# ── PASO 4: Test rapido del modelo LLM ──
-curl http://localhost:11434/api/generate -d "{\"model\":\"qwen2.5:3b\",\"prompt\":\"Hola, como estas?\",\"stream\":false}"
-# Debe responder en espanol en 2-5 segundos
+Invoke-RestMethod http://localhost:11434/api/tags
+# -> Debe listar qwen2.5:3b (viene pre-cargado en la imagen)
 
-# ── PASO 5: Abrir pruebas en navegador ──
+# ── PASO 5: Test rapido del modelo LLM ──
+Invoke-RestMethod -Uri http://localhost:11434/api/generate -Method POST -Body '{"model":"qwen2.5:3b","prompt":"Hola","stream":false}' -ContentType 'application/json'
+# Debe responder en espanol en 2-10 segundos
+
+# ── PASO 6: Abrir pruebas en navegador ──
 # http://localhost:4000/test/voice-test.html
 ```
 
 ### Comandos de mantenimiento
 
 ```bash
-# Ver logs de todos los servicios
+# Ver logs del contenedor
 docker compose logs -f
 
-# Ver logs solo de Ollama
-docker compose logs -f ollama
-
-# Rebuild solo la IA (despues de cambios en codigo)
-docker compose up -d --build blindsbook-ia
+# Rebuild despues de cambios en codigo (rapido, el modelo ya esta en la imagen)
+docker compose up -d --build
 
 # Cambiar a un modelo mas ligero (si RAM es limitada)
-docker compose exec ollama ollama pull qwen2.5:1.5b
+docker compose exec blindsbook-ia ollama pull qwen2.5:1.5b
 # Luego cambiar OLLAMA_MODEL=qwen2.5:1.5b en .env y reiniciar:
-docker compose up -d --build blindsbook-ia
+docker compose up -d
+
+# Entrar al contenedor para debug
+docker compose exec blindsbook-ia bash
 
 # Detener todo (los datos del modelo se mantienen en el volumen)
 docker compose down
 
-# Detener todo Y borrar volumenes (ELIMINA el modelo descargado)
+# Detener todo Y borrar volumenes (ELIMINA el modelo descargado del volumen)
 docker compose down -v
 ```
 
@@ -126,16 +137,15 @@ Cliente habla -> Microfono del navegador (STT) -> Texto -> IA procesa el dialogo
 
 | Servicio | Puerto | Funcion |
 |----------|--------|---------|
-| **Receptionist IA** (Node/Express) | 4000 | Servidor principal: dialogo, identificacion, endpoints de prueba, pagina de voz |
-| **BlindsBook-IA** (Docker/Python) | 8000 | Sintesis de voz (Piper TTS) — convierte texto a audio MP3 |
+| **Receptionist IA + Ollama** (Contenedor Unico) | 4000 + 11434 | Servidor Node.js + Ollama + Qwen2.5-3B en un solo contenedor Docker |
+| **BlindsBook-IA** (Docker/Python) | 8000 | Sintesis de voz (Piper TTS) — convierte texto a audio MP3 (opcional) |
 | **App-BlindsBook API** (NestJS) | 3000 | Base de datos de clientes, citas, equipo (obligatorio para identificacion) |
-| **Ollama** (Docker/nativo) | 11434 | Mini LLM local (Qwen2.5-3B) para Nivel 3 de identificacion |
 
 **Que se puede probar:**
 - Hablar por microfono y que la IA responda con voz (requiere puertos 4000 + 8000)
 - Identificacion automatica por Caller ID (requiere puerto 3000)
 - Identificacion por nombre/telefono con confirmacion (requiere puerto 3000)
-- Identificacion inteligente por LLM con busqueda por vendedor (requiere puertos 3000 + 11434)
+- Identificacion inteligente por LLM con busqueda por vendedor (requiere puertos 3000 + 4000)
 - Flujo completo: identificacion -> tipo -> fecha -> hora -> confirmacion -> cita creada
 
 ---
@@ -144,8 +154,7 @@ Cliente habla -> Microfono del navegador (STT) -> Texto -> IA procesa el dialogo
 
 ### Software necesario
 
-- **Node.js** >= 18 (para Receptionist IA)
-- **Docker Desktop** (para BlindsBook-IA con Piper TTS y Ollama)
+- **Docker Desktop** (unico requisito — el contenedor incluye Node.js + Ollama + modelo LLM)
 - **Navegador Chrome o Edge** (para prueba de voz — necesita Web Speech API)
 - **Microfono** activo en tu computadora
 
@@ -154,10 +163,17 @@ Cliente habla -> Microfono del navegador (STT) -> Texto -> IA procesa el dialogo
 El archivo `.env` en la raiz de `Receptionist IA/` debe tener configurado:
 
 ```env
-# API
-BLINDSBOOK_API_BASE_URL=http://localhost:3000
-BLINDSBOOK_LOGIN_EMAIL=tu_email@blindsbook.com
-BLINDSBOOK_LOGIN_PASSWORD=tu_password
+# API (URL del server de pruebas Azure)
+BLINDSBOOK_API_BASE_URL=https://blindsbook-mobile-api-test.ambitiouswave-0fcb242f.eastus.azurecontainerapps.io
+
+# Superusuario para auto-login + switch-company (RECOMENDADO):
+# Un solo usuario con IsSuperUser=1 puede generar tokens para CUALQUIER compania.
+# El sistema hace login y luego POST /api/auth/switch-company para cada compania.
+BLINDSBOOK_LOGIN_EMAIL=carconval@gmail.com
+BLINDSBOOK_LOGIN_PASSWORD=charlie
+
+# Token estatico (OPCIONAL): solo si NO usas auto-login.
+BLINDSBOOK_API_TOKEN=
 
 # TTS Docker
 DOCKER_TTS_URL=http://localhost:8000
@@ -166,57 +182,50 @@ DOCKER_TTS_URL=http://localhost:8000
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:3b
 
-# Multi-tenant
-TWILIO_NUMBER_TO_COMPANY_MAP={"+15550000001":{"token":"JWT_TOKEN","companyId":387}}
+# Multi-tenant: cada numero Twilio apunta a un companyId.
+# El superusuario (arriba) usa switch-company para generar JWT por compania.
+# Solo necesitas poner el companyId, NO email/password por compania.
+TWILIO_NUMBER_TO_COMPANY_MAP={"+15550000001":{"companyId":2},"+15550000002":{"companyId":163}}
 ```
 
-Ver `.env.example` para referencia completa.
+> **IMPORTANTE — Tokens y Auto-login con switch-company:**
+> La API BlindsBook usa JWT que expiran en 24h. Como Receptionist IA es un sistema
+> automatizado (nadie se loguea manualmente), implementa **auto-renovacion**:
+>
+> 1. **Al iniciar**: login como superusuario → obtiene JWT base
+> 2. **Switch-company**: para cada compania en el mapa, llama `POST /api/auth/switch-company`
+>    → obtiene JWT especifico con el companyId correcto
+> 3. **Cada 30 min**: verifica si algun token esta por expirar (< 1h de vida)
+> 4. **Si expira**: renueva el token base y luego switch-company otra vez
+> 5. **Si recibe 401**: invalida el token, re-obtiene via switch-company y reintenta
+>
+> **No necesitas renovar tokens manualmente.** Solo asegurate de que las credenciales
+> del superusuario en `.env` sean validas.
 
 ---
 
 ## 3. Paso 1 — Levantar los Servicios
 
-Abre **4 terminales** de PowerShell:
+Abre **2 terminales** de PowerShell:
 
-### Terminal 1: Docker IA (TTS)
-
-```powershell
-# Verificar que el contenedor ya esta corriendo
-docker ps | Select-String "blindsbook-ia"
-
-# Si NO esta corriendo, iniciarlo:
-docker start blindsbook-ia
-
-# Verificar:
-Invoke-RestMethod -Uri "http://localhost:8000/health"
-```
-
-### Terminal 2: Ollama (Mini LLM)
-
-```powershell
-# Opcion A: Ollama nativo (si esta instalado)
-ollama serve
-
-# Opcion B: Ollama en Docker
-docker compose up ollama
-
-# Verificar que el modelo esta descargado:
-ollama list
-# Debe listar "qwen2.5:3b"
-
-# Si no esta descargado:
-ollama pull qwen2.5:3b
-```
-
-### Terminal 3: Receptionist IA
+### Terminal 1: Receptionist IA + Ollama (Contenedor Unico)
 
 ```powershell
 cd "D:\Disco E trabajos\repositorio_blindsbook\Receptionist IA"
-npm run dev
-# Esperar: "Servicio IA recepcionista escuchando en puerto 4000"
+
+# Primera vez: construir imagen (30-90 min con internet lento)
+docker compose up -d --build
+
+# Ver logs para confirmar que todo inicio bien:
+docker compose logs -f blindsbook-ia
+# Esperar:
+#   [1/3] Iniciando Ollama...
+#   [2/3] Esperando que Ollama responda...
+#        ✓ Ollama listo
+#   [3/3] Iniciando Receptionist IA en puerto 4000...
 ```
 
-### Terminal 4: API BlindsBook
+### Terminal 2: API BlindsBook
 
 ```powershell
 cd "D:\Disco E trabajos\repositorio_blindsbook\App-BlindsBook\api"
@@ -542,9 +551,13 @@ Chat "si"                     # Confirmar
 ### Via API (PowerShell)
 
 ```powershell
-$token = "TU_JWT_DEL_ENV"
+# Obtener token (login manual para verificar)
+$body = @{email="tu_email@co.com"; password="tu_password"} | ConvertTo-Json
+$login = Invoke-RestMethod -Uri "https://blindsbook-mobile-api-test.ambitiouswave-0fcb242f.eastus.azurecontainerapps.io/api/auth/login" -Method POST -Body $body -ContentType "application/json"
+$token = $login.data.token
+
 $headers = @{ Authorization = "Bearer $token" }
-Invoke-RestMethod -Uri "http://localhost:3000/api/appointments?page=1&pageSize=5" -Headers $headers | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri "https://blindsbook-mobile-api-test.ambitiouswave-0fcb242f.eastus.azurecontainerapps.io/api/appointments?page=1&pageSize=5" -Headers $headers | ConvertTo-Json -Depth 6
 ```
 
 ### Via SQL Server
@@ -569,12 +582,12 @@ ORDER BY a.Id DESC;
 
 El sistema identifica a que compania pertenece la cita usando el parametro `toNumber`, que simula el numero Twilio al que el cliente llamo.
 
-Cada numero esta configurado en `.env` con su propio token JWT y companyId:
+Un **superusuario** (`carconval@gmail.com` / password: `charlie`) hace login una vez y luego usa `POST /api/auth/switch-company` para obtener JWT especificos por compania. **No se necesitan credenciales individuales** por compania.
 
-| Numero (toNumber) | CompanyId | Email | Descripcion |
+| Numero (toNumber) | CompanyId | Compania | Clientes |
 |---|---|---|---|
-| `+15550000001` | 387 | karla1@blindsbook.com | Compania principal de pruebas |
-| `+15550000002` | 2 | adortax76@hotmail.com | Compania secundaria |
+| `+15550000001` | 2 | All Blinds Inc | ~6,400 |
+| `+15550000002` | 163 | Sophie Blinds LLC | ~6,400 |
 
 ### En la pagina de voz
 
@@ -582,10 +595,24 @@ La pagina web tiene un **selector de compania** en la parte superior. Al elegir 
 
 ### Agregar mas companias
 
-Edita el `.env`:
+Edita el `.env`. **Con switch-company (recomendado — solo necesitas companyId):**
 ```
-TWILIO_NUMBER_TO_COMPANY_MAP={"+15550000001":{"companyId":387,"token":"JWT"},"+15550000002":{"companyId":2,"token":"JWT"}}
+TWILIO_NUMBER_TO_COMPANY_MAP={"+15550000001":{"companyId":2},"+15550000002":{"companyId":163},"+15550000003":{"companyId":387}}
 ```
+
+El superusuario (`BLINDSBOOK_LOGIN_EMAIL` / `BLINDSBOOK_LOGIN_PASSWORD`) genera tokens para todas las companias automaticamente.
+
+**Formato legacy con credenciales propias por compania:**
+```
+TWILIO_NUMBER_TO_COMPANY_MAP={"+15550000001":{"companyId":163,"email":"user@co.com","password":"pass"}}
+```
+
+**Formato legacy con token estatico (expira en 24h — NO recomendado):**
+```
+TWILIO_NUMBER_TO_COMPANY_MAP={"+15550000001":{"companyId":163,"token":"JWT_aqui"}}
+```
+
+> Se pueden mezclar los 3 formatos. El sistema prioriza: switch-company > credenciales propias > token estatico.
 
 ---
 
@@ -671,31 +698,37 @@ Invoke-RestMethod -Uri "http://localhost:8000/health"
 # Verificar que Ollama esta corriendo:
 curl http://localhost:11434/api/tags
 
-# Si no responde:
-ollama serve           # nativo
-# o
-docker compose up ollama  # Docker
+# Si no responde, reiniciar el contenedor:
+docker compose restart blindsbook-ia
+docker compose logs -f blindsbook-ia
+# Esperar que aparezca "✓ Ollama listo"
 
-# Verificar modelo descargado:
-ollama list
+# Verificar modelo desde dentro del contenedor:
+docker compose exec blindsbook-ia ollama list
 # Si no aparece qwen2.5:3b:
-ollama pull qwen2.5:3b
+docker compose exec blindsbook-ia ollama pull qwen2.5:3b
 ```
 
 ### "No pude encontrar a [nombre]" siempre
 
-La API BlindsBook (puerto 3000) no esta corriendo, o el JWT expiro:
+La API BlindsBook no esta accesible, o las credenciales en `.env` son incorrectas:
 
 ```powershell
 # Verificar API:
-Invoke-RestMethod -Uri "http://localhost:3000/api/health"
+Invoke-RestMethod -Uri "https://blindsbook-mobile-api-test.ambitiouswave-0fcb242f.eastus.azurecontainerapps.io/api/health"
 
-# Renovar JWT:
-$loginBody = @{email="karla1@blindsbook.com"; password="TU_PASSWORD"} | ConvertTo-Json
-$response = Invoke-RestMethod -Uri "http://localhost:3000/api/auth/login" -Method POST -Body $loginBody -ContentType "application/json"
-$response.data.token
-# Copia el nuevo token al .env en TWILIO_NUMBER_TO_COMPANY_MAP
+# Verificar logs del TokenManager:
+docker compose logs --tail 30 blindsbook-ia | Select-String "TokenManager"
+# Debe mostrar: "[TokenManager] ✓ Login compañía 163 OK"
+# Si muestra: "[TokenManager] ✗ Login ... falló" → las credenciales son incorrectas
+
+# Probar login manualmente:
+$body = @{email="tu_email@co.com"; password="tu_password"} | ConvertTo-Json
+Invoke-RestMethod -Uri "https://blindsbook-mobile-api-test.ambitiouswave-0fcb242f.eastus.azurecontainerapps.io/api/auth/login" -Method POST -Body $body -ContentType "application/json"
 ```
+
+> **NOTA:** Los tokens se renuevan automaticamente. Si el login falla, verifica que
+> BLINDSBOOK_LOGIN_EMAIL y BLINDSBOOK_LOGIN_PASSWORD en el .env sean correctos.
 
 ### El LLM responde en idioma incorrecto
 
@@ -752,26 +785,22 @@ La IA usa chrono-node para parsear fechas naturales:
 +--------------------------------------------------------------------+
          |                                       |
          v                                       v
-+------------------+   +------------------+   +------------------+
-| Receptionist IA  |   | BlindsBook-IA    |   | App-BlindsBook   |
-| Express + TS     |-->| Docker + Python  |   | NestJS API       |
-| Puerto: 4000     |   | Puerto: 8000     |   | Puerto: 3000     |
-|                  |   |                  |   |                  |
-| Dialogo citas    |   | Piper TTS (ES)   |   | Clientes         |
-| Identificacion   |   | Piper TTS (EN)   |   | Citas            |
-| 3-level cascade  |   |                  |   | Team members     |
-| Multi-tenant     |   |                  |   | JWT Auth         |
-+------------------+   +------------------+   +------------------+
-         |
-         v
-+------------------+
-| Ollama           |
-| Puerto: 11434    |
-|                  |
-| Qwen2.5-3B      |
-| Function calling |
-| $0 / llamada     |
-+------------------+
++-------------------------------+             +------------------+
+| Receptionist IA (Cont. Unico)|             | App-BlindsBook   |
+| Docker: Ubuntu 22.04         |             | NestJS API       |
+| Puerto: 4000 + 11434         |             | Puerto: 3000     |
+|                               |             |                  |
+| ┌──────────────────────────┐ |             | Clientes         |
+| │ Node.js (Express + TS)   │ |             | Citas            |
+| │ Dialogo, Identificacion  │ |             | Team members     |
+| │ Multi-tenant, 3-level    │ |             | JWT Auth         |
+| └──────────────────────────┘ |             +------------------+
+| ┌──────────────────────────┐ |
+| │ Ollama + Qwen2.5-3B     │ |
+| │ Function calling         │ |
+| │ $0 / llamada             │ |
+| └──────────────────────────┘ |
++-------------------------------+
 ```
 
 ### Flujo del Dialogo (State Machine)

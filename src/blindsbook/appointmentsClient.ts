@@ -1,7 +1,8 @@
-import axios from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import type { CreateAppointmentPayload, Appointment } from '../models/appointments.js';
 import type { CustomerMatch } from '../dialogue/state.js';
 import { loadEnv } from '../config/env.js';
+import { TokenManager } from './tokenManager.js';
 
 const env = loadEnv();
 
@@ -11,52 +12,82 @@ const api = axios.create({
   timeout: 10_000,
 });
 
-let cachedToken: string | null = null;
-let currentTokenOverride: string | null = null;
+// ─── Token Manager (auto-login + renovación) ───
 
-export function setTokenForCompany(token: string): void {
-  currentTokenOverride = token;
+const tokenManager = new TokenManager(env.blindsbookApiBaseUrl);
+
+// Configurar credenciales default
+tokenManager.setDefaultCredentials(env.blindsbookLoginEmail, env.blindsbookLoginPassword);
+tokenManager.setDefaultStaticToken(env.blindsbookApiToken || null);
+
+// Registrar compañías del mapa Twilio
+for (const [, config] of env.twilioNumberToCompanyMap) {
+  tokenManager.registerCompany(config.companyId, {
+    companyId: config.companyId,
+    email: config.email ?? '',
+    password: config.password ?? '',
+    token: config.token,
+  });
+}
+
+// Variable para indicar qué compañía está activa en la llamada actual
+let currentCompanyId: number | null = null;
+
+export function setTokenForCompany(companyConfig: { companyId: number; token?: string; email?: string; password?: string }): void {
+  currentCompanyId = companyConfig.companyId;
 }
 
 export function clearTokenOverride(): void {
-  currentTokenOverride = null;
+  currentCompanyId = null;
 }
 
+/**
+ * Obtiene un JWT válido. Usa TokenManager para auto-login y renovación.
+ */
 async function getBearerToken(): Promise<string | null> {
-  // 1) Prefer token override (por número Twilio)
-  if (currentTokenOverride) return currentTokenOverride;
-
-  // 2) Prefer token fijo si está configurado
-  if (env.blindsbookApiToken) return env.blindsbookApiToken;
-
-  // 3) Si ya hicimos login en runtime, reutilizar
-  if (cachedToken) return cachedToken;
-
-  // 4) Auto-login opcional (para desarrollo): POST /api/auth/login
-  if (env.blindsbookLoginEmail && env.blindsbookLoginPassword) {
-    const res = await api.post<{
-      success: boolean;
-      data?: { token?: string };
-    }>('/auth/login', {
-      email: env.blindsbookLoginEmail,
-      password: env.blindsbookLoginPassword,
-    });
-
-    const token = res.data?.data?.token;
-    if (token) {
-      cachedToken = token;
-      return token;
-    }
-  }
-
-  return null;
+  return tokenManager.getToken(currentCompanyId ?? undefined);
 }
 
-api.interceptors.request.use((config) => {
-  const headers = config.headers ?? {};
-  config.headers = headers;
-  return config;
-});
+/**
+ * Inicializa el TokenManager: login inicial + renovación proactiva.
+ * Llamar al arrancar el servidor.
+ */
+export async function initTokenManager(): Promise<void> {
+  console.log('[Auth] Iniciando TokenManager — auto-login para todas las compañías...');
+  await tokenManager.loginAll();
+  tokenManager.startProactiveRenewal();
+  console.log('[Auth] TokenManager listo — tokens se renuevan automáticamente');
+}
+
+// ─── Interceptor: retry automático en 401 ───
+
+interface AxiosRequestConfigWithRetry extends InternalAxiosRequestConfig {
+  _retry?: boolean;
+}
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const config = error.config as AxiosRequestConfigWithRetry | undefined;
+
+    // Si es 401 y no hemos reintentado aún
+    if (error.response?.status === 401 && config && !config._retry) {
+      config._retry = true;
+
+      console.warn('[Auth] 401 recibido — invalidando token y reintentando login...');
+      tokenManager.invalidateToken(currentCompanyId ?? undefined);
+
+      // Obtener nuevo token (forzará re-login)
+      const newToken = await getBearerToken();
+      if (newToken) {
+        config.headers.Authorization = `Bearer ${newToken}`;
+        return api(config);
+      }
+    }
+
+    return Promise.reject(error);
+  },
+);
 
 // ─── Helpers ───
 
