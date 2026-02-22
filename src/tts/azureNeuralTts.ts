@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { loadEnv } from '../config/env.js';
+import { enrichSsmlBody } from '../dialogue/humanizer.js';
 
 type SpeechLang = 'es' | 'en';
 
@@ -28,17 +29,22 @@ export async function synthesizeAzureMp3(
     throw new Error('Azure TTS no está configurado (AZURE_SPEECH_KEY/AZURE_SPEECH_REGION)');
   }
 
+  // Voces neurales optimizadas para tono cálido de receptionist
+  // es-MX-DaliaNeural: voz femenina mexicana, natural para público LATAM/US-Hispanic
+  // en-US-JennyNeural: voz femenina US, tono amable y profesional
   const voiceName =
     language === 'en'
       ? env.azureTtsVoiceEn || 'en-US-JennyNeural'
-      : env.azureTtsVoiceEs || 'es-ES-ElviraNeural';
+      : env.azureTtsVoiceEs || 'es-MX-DaliaNeural';
 
-  const langTag = language === 'en' ? 'en-US' : 'es-ES';
+  const langTag = language === 'en' ? 'en-US' : 'es-MX';
 
-  // SSML simple (neural voice)
+  // SSML enriquecido con pausas y prosodia naturales
+  const enrichedBody = enrichSsmlBody(escapeXml(text));
+
   const ssml =
-    `<speak version="1.0" xml:lang="${langTag}">` +
-    `<voice name="${voiceName}">${escapeXml(text)}</voice>` +
+    `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${langTag}">` +
+    `<voice name="${voiceName}">${enrichedBody}</voice>` +
     `</speak>`;
 
   const url = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;

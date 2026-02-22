@@ -116,11 +116,11 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
           // eslint-disable-next-line no-console
           console.log(`[TTS] Usando proveedor: ${ttsResult.provider}`);
         } else {
-          // Ningún proveedor disponible
+          // Ningún proveedor disponible — usar voces neurales de Polly
           gather.say(
             {
               language: twilioLang,
-              voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
+              voice: state.language === 'en' ? 'Polly.Joanna-Neural' : 'Polly.Lupe-Neural',
             } as any,
             replyText,
           );
@@ -131,7 +131,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
         gather.say(
           {
             language: twilioLang,
-            voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
+            voice: state.language === 'en' ? 'Polly.Joanna-Neural' : 'Polly.Lupe-Neural',
           } as any,
           replyText,
         );
@@ -140,7 +140,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
       gather.say(
         {
           language: twilioLang,
-          voice: state.language === 'en' ? 'Polly.Joanna' : 'Polly.Lucia',
+          voice: state.language === 'en' ? 'Polly.Joanna-Neural' : 'Polly.Lupe-Neural',
         } as any,
         replyText,
       );

@@ -7,6 +7,16 @@ import {
 } from '../blindsbook/appointmentsClient.js';
 import { runIdentificationAgent } from '../llm/identificationAgent.js';
 import { parseDateTimeFromText, mergeTimeIntoDate } from './dateParser.js';
+import {
+  pick,
+  maybeFiller,
+  GREETINGS_ES, GREETINGS_EN,
+  HOW_CAN_HELP_ES, HOW_CAN_HELP_EN,
+  PERFECT_ES, PERFECT_EN,
+  WAIT_ES, WAIT_EN,
+  SORRY_ES, SORRY_EN,
+  GOODBYE_ES, GOODBYE_EN,
+} from './humanizer.js';
 
 export interface DialogueTurnResult {
   state: ConversationState;
@@ -107,8 +117,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'Bienvenido a BlindsBook. ¿Me podría dar su nombre completo o el número de teléfono con el que se registró?',
-              'Welcome to BlindsBook. Could you give me your full name or the phone number you registered with?',
+              '¡Bienvenido a BlindsBook! Soy su asistente virtual. ¿Me podría dar su nombre completo o el número de teléfono con el que se registró?',
+              'Welcome to BlindsBook! I\'m your virtual assistant. Could you give me your full name or the phone number you registered with?',
             ),
             isFinished: false,
           };
@@ -133,12 +143,14 @@ export function handleUserInput(
             customerNameSpoken: name,
             step: 'greeting',
           };
+          const greeting = t(
+            pick(GREETINGS_ES).replace('{name}', name),
+            pick(GREETINGS_EN).replace('{name}', name),
+          );
+          const helpQ = t(pick(HOW_CAN_HELP_ES), pick(HOW_CAN_HELP_EN));
           return {
             state,
-            replyText: t(
-              `¡Hola ${name}! Bienvenido de vuelta a BlindsBook. ¿En qué puedo ayudarle hoy?`,
-              `Hello ${name}! Welcome back to BlindsBook. How can I help you today?`,
-            ),
+            replyText: `${greeting} ${helpQ}`,
             isFinished: false,
           };
         }
@@ -170,8 +182,8 @@ export function handleUserInput(
         return {
           state,
           replyText: t(
-            'Bienvenido a BlindsBook. No reconozco este número de teléfono. ¿Me podría dar su nombre completo o el teléfono con el que se registró?',
-            "Welcome to BlindsBook. I don't recognize this phone number. Could you give me your full name or the phone number you registered with?",
+            '¡Bienvenido a BlindsBook! Soy su asistente virtual. No logré reconocer este número de teléfono. ¿Me podría dar su nombre completo o el número con el que se registró?',
+            "Welcome to BlindsBook! I'm your virtual assistant. I wasn't able to recognize this phone number. Could you give me your full name or the number you registered with?",
           ),
           isFinished: false,
         };
@@ -185,8 +197,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'No escuché su respuesta. ¿Podría decirme su nombre completo?',
-              "I didn't hear your response. Could you tell me your full name?",
+              `${pick(SORRY_ES)}, no alcancé a escuchar su respuesta. ¿Podría decirme su nombre completo?`,
+              `${pick(SORRY_EN)}, I didn't catch your response. Could you tell me your full name?`,
             ),
             isFinished: false,
           };
@@ -210,8 +222,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              `Perfecto, ${name}. ¿En qué puedo ayudarle hoy?`,
-              `Great, ${name}. How can I help you today?`,
+              `${pick(PERFECT_ES)}, ${name}. ${pick(HOW_CAN_HELP_ES)}`,
+              `${pick(PERFECT_EN)}, ${name}. ${pick(HOW_CAN_HELP_EN)}`,
             ),
             isFinished: false,
           };
@@ -254,8 +266,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'No escuché el nombre o teléfono. Por favor dígame su nombre completo o el teléfono con el que se registró.',
-              "I didn't catch the name or phone. Please tell me your full name or the phone number you registered with.",
+              `${pick(SORRY_ES)}, no alcancé a escuchar. ¿Me podría dar su nombre completo o el teléfono con el que se registró?`,
+              `${pick(SORRY_EN)}, I didn't quite catch that. Could you give me your full name or the phone number you registered with?`,
             ),
             isFinished: false,
           };
@@ -363,8 +375,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              `Perfecto, ${name}. ¿En qué puedo ayudarle hoy?`,
-              `Great, ${name}. How can I help you today?`,
+              `${pick(PERFECT_ES)}, ${name}. ${pick(HOW_CAN_HELP_ES)}`,
+              `${pick(PERFECT_EN)}, ${name}. ${pick(HOW_CAN_HELP_EN)}`,
             ),
             isFinished: false,
           };
@@ -385,8 +397,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'Disculpe la confusión. ¿Podría darme su nombre exacto como aparece registrado?',
-              'Sorry for the confusion. Could you give me your exact name as registered?',
+              `${pick(SORRY_ES)} la confusión. ¿Podría darme su nombre exacto como aparece registrado?`,
+              `${pick(SORRY_EN)} for the confusion. Could you give me your exact name as registered?`,
             ),
             isFinished: false,
           };
@@ -485,8 +497,8 @@ export function handleUserInput(
         }
         state = { ...state, step: 'askType' };
         const replyText = t(
-          'Le ayudaré a agendar una cita. ¿La visita es para una cotización, instalación o reparación?',
-          'I will help you schedule an appointment. Is this for a quote, installation, or repair?',
+          `${maybeFiller('es')}Con mucho gusto le ayudaré a agendar una cita. ¿La visita es para una cotización, instalación o reparación?`,
+          `${maybeFiller('en')}I'd be happy to help you schedule an appointment. Is this for a quote, installation, or repair?`,
         );
         return { state, replyText, isFinished: false };
       }
@@ -510,8 +522,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'Disculpe, no le entendí. ¿La cita es para cotización, instalación o reparación?',
-              'Sorry, I did not understand. Is it for a quote, installation, or repair?',
+              `${pick(SORRY_ES)}, no le entendí bien. ¿La cita es para cotización, instalación o reparación?`,
+              `${pick(SORRY_EN)}, I didn't quite understand. Is it for a quote, installation, or repair?`,
             ),
             isFinished: false,
           };
@@ -519,8 +531,8 @@ export function handleUserInput(
 
         const customerName = state.customerConfirmedName || state.customerNameSpoken || '';
         const replyText = t(
-          `Perfecto${customerName ? `, ${customerName}` : ''}, agendaremos una cita de ${typeText}. ¿Para qué fecha desea la cita? Por ejemplo, puede decir "mañana", "el lunes" o una fecha específica.`,
-          `Great${customerName ? `, ${customerName}` : ''}, we'll schedule a ${typeText} appointment. What date would you like? For example, you can say "tomorrow", "next Monday", or a specific date.`,
+          `${pick(PERFECT_ES)}${customerName ? `, ${customerName}` : ''}. Agendaremos una cita de ${typeText}. ¿Para qué fecha le gustaría? Puede decir "mañana", "el lunes" o una fecha específica.`,
+          `${pick(PERFECT_EN)}${customerName ? `, ${customerName}` : ''}. We'll schedule a ${typeText} appointment. What date works for you? You can say "tomorrow", "next Monday", or a specific date.`,
         );
         return { state, replyText, isFinished: false };
       }
@@ -533,8 +545,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'No escuché la fecha. ¿Para qué día desea la cita?',
-              "I didn't catch the date. What day would you like the appointment?",
+              `${pick(SORRY_ES)}, no alcancé a escuchar la fecha. ¿Para qué día le gustaría la cita?`,
+              `${pick(SORRY_EN)}, I didn't catch the date. What day would you like the appointment?`,
             ),
             isFinished: false,
           };
@@ -558,16 +570,16 @@ export function handleUserInput(
         if (parsed.hasTime) {
           state = { ...state, step: 'askDuration' };
           const replyText = t(
-            `Perfecto, la cita será el ${parsed.humanReadable}. ¿Cuánto tiempo durará? La duración estándar es una hora. Diga "está bien" para una hora, o indique otra duración.`,
-            `Great, the appointment will be on ${parsed.humanReadable}. How long will it be? Standard duration is one hour. Say "okay" for one hour, or specify a different duration.`,
+            `${pick(PERFECT_ES)}, la cita será el ${parsed.humanReadable}. ¿Cuánto tiempo durará la visita? Lo estándar es una hora. Diga "está bien" para una hora, o indíqueme otra duración.`,
+            `${pick(PERFECT_EN)}, the appointment will be on ${parsed.humanReadable}. How long will it take? Standard duration is one hour. Say "okay" for one hour, or let me know a different duration.`,
           );
           return { state, replyText, isFinished: false };
         }
 
         state = { ...state, step: 'askTime' };
         const replyText = t(
-          `Bien, anotaré para el ${parsed.humanReadable}. ¿A qué hora desea la cita? Por ejemplo, "a las 10 de la mañana" o "a las 2 de la tarde".`,
-          `Okay, I'll note ${parsed.humanReadable}. What time would you like? For example, "10 AM" or "2 PM".`,
+          `${maybeFiller('es')}Bien, anotaré para el ${parsed.humanReadable}. ¿A qué hora le gustaría? Por ejemplo, "a las 10 de la mañana" o "a las 2 de la tarde".`,
+          `${maybeFiller('en')}Okay, I'll note ${parsed.humanReadable}. What time works for you? For example, "10 AM" or "2 PM".`,
         );
         return { state, replyText, isFinished: false };
       }
@@ -580,8 +592,8 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'No escuché la hora. ¿A qué hora desea la cita?',
-              "I didn't catch the time. What time would you like?",
+              `${pick(SORRY_ES)}, no alcancé a escuchar la hora. ¿A qué hora le gustaría la cita?`,
+              `${pick(SORRY_EN)}, I didn't catch the time. What time would you like?`,
             ),
             isFinished: false,
           };
@@ -603,8 +615,8 @@ export function handleUserInput(
 
         state = { ...state, startDateISO: merged.iso, step: 'askDuration' };
         const replyText = t(
-          `Perfecto, la cita será el ${merged.humanReadable}. La duración estándar es una hora. ¿Está bien, o prefiere otra duración?`,
-          `Great, the appointment will be on ${merged.humanReadable}. Standard duration is one hour. Is that okay, or would you prefer a different duration?`,
+          `${pick(PERFECT_ES)}, la cita será el ${merged.humanReadable}. La duración estándar es una hora. ¿Le parece bien, o prefiere otra duración?`,
+          `${pick(PERFECT_EN)}, the appointment will be on ${merged.humanReadable}. Standard duration is one hour. Does that work, or would you prefer a different duration?`,
         );
         return { state, replyText, isFinished: false };
       }
@@ -677,8 +689,8 @@ export function handleUserInput(
 
         state = { ...state, step: 'creatingAppointment' };
         const replyText = t(
-          'Perfecto, estoy creando su cita en el sistema BlindsBook. Un momento por favor.',
-          "Perfect, I'm creating your appointment in BlindsBook. One moment please.",
+          `${pick(PERFECT_ES)}, ${pick(WAIT_ES).replace('...', '.')} Estoy registrando su cita en el sistema BlindsBook.`,
+          `${pick(PERFECT_EN)}, ${pick(WAIT_EN).replace('...', '.')} I'm creating your appointment in BlindsBook.`,
         );
         return { state, replyText, isFinished: false };
       }
@@ -688,9 +700,10 @@ export function handleUserInput(
       // ══════════════════════════════════════════
       case 'creatingAppointment': {
         state = { ...state, step: 'completed' };
+        const goodbye = t(pick(GOODBYE_ES), pick(GOODBYE_EN));
         const replyText = t(
-          'Su cita ha sido registrada exitosamente. ¿Hay algo más en lo que pueda ayudarle? Si no, le agradezco su llamada a BlindsBook. ¡Que tenga un excelente día!',
-          'Your appointment has been successfully created. Is there anything else I can help you with? If not, thank you for calling BlindsBook. Have a wonderful day!',
+          `¡Su cita ha sido registrada exitosamente! ¿Hay algo más en lo que pueda ayudarle? Si no, le agradezco mucho su llamada a BlindsBook. ${goodbye}`,
+          `Your appointment has been successfully created! Is there anything else I can help with? If not, thank you so much for calling BlindsBook. ${goodbye}`,
         );
         return { state, replyText, isFinished: true };
       }
