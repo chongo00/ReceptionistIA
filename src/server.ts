@@ -6,7 +6,7 @@ import cors from 'cors';
 import { twilioVoiceRouter } from './twilio/voiceWebhook.js';
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from './dialogue/manager.js';
 import { loadEnv } from './config/env.js';
-import { setTokenForCompany, clearTokenOverride, createAppointment, initTokenManager } from './blindsbook/appointmentsClient.js';
+import { setTokenForCompany, clearTokenOverride, createAppointment, initTokenManager, findCustomersByPhone } from './blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from './models/appointments.js';
 import { getAudio } from './tts/ttsCache.js';
 import { synthesizeTts } from './tts/ttsProvider.js';
@@ -106,6 +106,57 @@ export async function startServer() {
     }
 
     res.json(result);
+  });
+
+  // ─── Customer lookup by phone (searches across all configured companies) ───
+  app.get('/debug/customer-lookup', async (req, res) => {
+    const phone = String(req.query.phone || '').trim();
+    if (!phone || phone.length < 3) {
+      res.status(400).json({ success: false, error: 'Se requiere parámetro "phone" (mínimo 3 caracteres)' });
+      return;
+    }
+
+    interface LookupResult {
+      id: number;
+      firstName: string | null;
+      lastName: string | null;
+      companyName: string | null;
+      phone: string | null;
+      accountManagerId: number | null;
+      companyId: number;
+      twilioNumber: string;
+    }
+
+    const results: LookupResult[] = [];
+    const companiesSearched: number[] = [];
+
+    for (const [twilioNumber, cfg] of env.twilioNumberToCompanyMap) {
+      companiesSearched.push(cfg.companyId);
+      try {
+        setTokenForCompany(cfg);
+        const matches = await findCustomersByPhone(phone);
+        for (const match of matches) {
+          results.push({
+            ...match,
+            companyId: cfg.companyId,
+            twilioNumber,
+          });
+        }
+      } catch (err) {
+        console.warn(`customer-lookup: error buscando en compañía ${cfg.companyId}:`, err);
+      }
+    }
+
+    // Restore default
+    clearTokenOverride();
+
+    res.json({
+      success: true,
+      phone,
+      companiesSearched,
+      totalResults: results.length,
+      results,
+    });
   });
 
   app.post('/debug/voice-chat', async (req, res) => {

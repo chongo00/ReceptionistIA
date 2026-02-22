@@ -5,21 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BlindsBook — Prueba de Voz IA Recepcionista</title>
 <style>
-  :root { --bg:#0f172a; --card:#1e293b; --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --text:#e2e8f0; --mute:#94a3b8; }
+  :root { --bg:#0f172a; --card:#1e293b; --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --yellow:#eab308; --text:#e2e8f0; --mute:#94a3b8; --border:#475569; }
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:20px; }
   h1 { font-size:1.5rem; margin-bottom:4px; }
   .subtitle { color:var(--mute); font-size:.85rem; margin-bottom:20px; }
-  .panel { background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:720px; margin-bottom:16px; }
+  .panel { background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:840px; margin-bottom:16px; }
   .panel h2 { font-size:1rem; margin-bottom:12px; color:var(--accent); }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
   label { font-size:.85rem; color:var(--mute); min-width:90px; }
-  select, input[type=text] { background:#334155; border:1px solid #475569; color:var(--text); padding:8px 12px; border-radius:8px; font-size:.9rem; }
+  select, input[type=text] { background:#334155; border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:8px; font-size:.9rem; }
   select { min-width:200px; }
   input[type=text] { flex:1; min-width:200px; }
   .btn { border:none; padding:10px 24px; border-radius:8px; font-size:.95rem; font-weight:600; cursor:pointer; transition:all .2s; display:inline-flex; align-items:center; gap:8px; }
   .btn-primary { background:var(--accent); color:#fff; }
   .btn-primary:hover { background:#2563eb; }
+  .btn-search { background:var(--green); color:#fff; padding:8px 18px; font-size:.9rem; }
+  .btn-search:hover { background:#16a34a; }
+  .btn-search:disabled { opacity:.5; cursor:not-allowed; }
   .btn-record { background:var(--green); color:#fff; font-size:1.1rem; padding:14px 32px; }
   .btn-record.recording { background:var(--red); animation:pulse 1s infinite; }
   .btn-stop { background:var(--red); color:#fff; }
@@ -40,19 +43,68 @@
   .state-bar { display:flex; gap:8px; flex-wrap:wrap; font-size:.75rem; margin-top:8px; }
   .state-bar .chip { background:#334155; padding:3px 8px; border-radius:4px; }
   .state-bar .chip b { color:var(--accent); }
-  .mode-toggle { display:flex; gap:0; border-radius:8px; overflow:hidden; border:1px solid #475569; }
+  .mode-toggle { display:flex; gap:0; border-radius:8px; overflow:hidden; border:1px solid var(--border); }
   .mode-toggle button { background:#334155; color:var(--mute); border:none; padding:8px 16px; cursor:pointer; font-size:.85rem; }
   .mode-toggle button.active { background:var(--accent); color:#fff; }
   #textInput { display:none; }
   #textInput.active { display:flex; }
   .info { background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px; font-size:.8rem; color:var(--mute); line-height:1.6; }
   .info b { color:var(--text); }
+
+  /* ─── Customer Lookup Panel ─── */
+  .lookup-input-row { display:flex; gap:8px; align-items:center; }
+  .lookup-input-row input { flex:1; font-size:1rem; padding:10px 14px; }
+  #lookupStatus { font-size:.8rem; color:var(--mute); margin-top:6px; min-height:20px; }
+  #lookupStatus.searching { color:var(--yellow); }
+  #lookupStatus.found { color:var(--green); }
+  #lookupStatus.notfound { color:var(--red); }
+
+  .customer-card { display:none; margin-top:14px; background:#0f172a; border:1px solid var(--border); border-radius:10px; padding:14px 18px; }
+  .customer-card.visible { display:block; }
+  .customer-card .card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .customer-card .card-header h3 { font-size:1.05rem; color:var(--green); margin:0; }
+  .customer-card .card-header .badge { background:var(--accent); color:#fff; padding:2px 10px; border-radius:12px; font-size:.75rem; font-weight:600; }
+  .customer-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 20px; }
+  .customer-grid .field { display:flex; flex-direction:column; padding:4px 0; }
+  .customer-grid .field .lbl { font-size:.7rem; color:var(--mute); text-transform:uppercase; letter-spacing:.5px; }
+  .customer-grid .field .val { font-size:.88rem; color:var(--text); font-weight:500; }
+  .customer-grid .field .val.highlight { color:var(--accent); }
+  .customer-grid .field .val.dim { color:var(--mute); font-style:italic; }
+  .config-auto { margin-top:10px; padding:8px 12px; background:#1a2744; border:1px solid #2d4a7a; border-radius:8px; font-size:.8rem; color:#93c5fd; }
+  .config-auto b { color:var(--accent); }
+
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .customer-card.visible { animation: fadeIn .3s ease; }
 </style>
 </head>
 <body>
 
 <h1>🎙️ BlindsBook — IA Recepcionista</h1>
-<p class="subtitle">Prueba de voz en tiempo real — Habla por micrófono o escribe</p>
+<p class="subtitle">Prueba de voz en tiempo real — Busca un cliente por teléfono, luego habla o escribe</p>
+
+<!-- CUSTOMER LOOKUP -->
+<div class="panel">
+  <h2>🔍 Búsqueda de Cliente por Teléfono</h2>
+  <div class="lookup-input-row">
+    <input type="text" id="customerPhone" placeholder="Ingresa el número de teléfono del cliente (ej: 305-123-4567)" 
+           onkeydown="if(event.key==='Enter')lookupCustomer()" />
+    <button class="btn btn-search" id="btnSearch" onclick="lookupCustomer()">🔍 Buscar</button>
+  </div>
+  <div id="lookupStatus"></div>
+
+  <div class="customer-card" id="customerCard">
+    <div class="card-header">
+      <h3 id="cardCustomerName">—</h3>
+      <span class="badge" id="cardCompanyBadge">—</span>
+    </div>
+    <div class="customer-grid" id="customerGrid">
+      <!-- Populated dynamically -->
+    </div>
+    <div class="config-auto" id="configAutoMsg" style="display:none">
+      ✅ Configuración aplicada automáticamente — <b>toNumber</b>: <span id="autoToNumber"></span> | <b>fromNumber (Caller ID)</b>: <span id="autoFromNumber"></span>
+    </div>
+  </div>
+</div>
 
 <!-- CONFIG -->
 <div class="panel">
@@ -61,8 +113,9 @@
     <label>Compañía:</label>
     <select id="companySelect">
       <option value="">— Sin seleccionar (token por defecto) —</option>
-      <option value="+15550000001" selected>Compañía 387 — karla1@blindsbook.com</option>
-      <option value="+15550000002">Compañía 2 — adortax76@hotmail.com</option>
+      <option value="+15550000001">Compañía 2 — All Blinds Inc</option>
+      <option value="+15550000002">Compañía 163 — ai_agent_callcenter</option>
+      <option value="+15550000003">Compañía 387 — karla1@blindsbook.com</option>
     </select>
   </div>
   <div class="row">
@@ -71,7 +124,7 @@
   </div>
   <div class="row">
     <label>Caller ID:</label>
-    <input type="text" id="callerPhone" value="+15551234567" placeholder="+1XXXXXXXXXX (simula From)" />
+    <input type="text" id="callerPhone" value="+15551234567" placeholder="+1XXXXXXXXXX (simula From del cliente)" />
   </div>
   <div class="row">
     <label>Modo:</label>
@@ -85,7 +138,7 @@
 
 <!-- STATUS -->
 <div class="panel">
-  <div id="status" class="status idle">Listo — Presiona el botón para hablar</div>
+  <div id="status" class="status idle">Listo — Busca un cliente arriba o presiona el botón para hablar</div>
   <div class="state-bar" id="stateBar"></div>
 </div>
 
@@ -111,11 +164,12 @@
 <!-- INFO -->
 <div class="panel info">
   <b>¿Cómo funciona?</b><br>
-  1. Selecciona la <b>compañía</b> (determina qué clientes y citas se gestionan).<br>
-  2. Presiona <b>🎤</b> y habla (usa el micrófono del navegador para convertir voz a texto).<br>
-  3. El texto se envía a <b>/debug/voice-chat</b> → la IA procesa el diálogo → genera audio con <b>Piper TTS</b>.<br>
+  1. Ingresa el <b>teléfono del cliente</b> y presiona <b>Buscar</b> — se consultan las compañías configuradas en el sistema.<br>
+  2. Si se encuentra, verás los datos del cliente y la configuración se aplica automáticamente (<b>toNumber</b> y <b>Caller ID</b>).<br>
+  3. Presiona <b>🎤</b> y habla (o usa el modo Texto) — la IA identifica al cliente y gestiona la cita.<br>
   4. El audio se reproduce automáticamente — escucharás la respuesta de la recepcionista.<br>
   5. Repite hasta completar la cita.<br><br>
+  <b>Compañías configuradas:</b> 2 (All Blinds Inc), 163 (ai_agent_callcenter), 387 (karla1).<br>
   <b>Requisitos:</b> Chrome o Edge (Web Speech API). Micrófono activo. Servicios en puertos 4000 + 8000.
 </div>
 
@@ -127,6 +181,96 @@ let recognition = null;
 let isRecording = false;
 let isPlaying = false;
 let currentAudio = null;
+let lastLookupResult = null; // last successful customer lookup
+
+// ─── Customer Lookup ───
+async function lookupCustomer() {
+  const phoneInput = document.getElementById('customerPhone');
+  const phone = phoneInput.value.trim();
+  if (!phone || phone.length < 3) {
+    setLookupStatus('notfound', '⚠️ Ingresa al menos 3 caracteres del teléfono');
+    return;
+  }
+
+  const btn = document.getElementById('btnSearch');
+  btn.disabled = true;
+  btn.textContent = '⏳ Buscando...';
+  setLookupStatus('searching', `🔍 Buscando "${phone}" en compañías configuradas...`);
+  hideCustomerCard();
+
+  try {
+    const resp = await fetch(API() + '/debug/customer-lookup?phone=' + encodeURIComponent(phone));
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    if (data.results && data.results.length > 0) {
+      const customer = data.results[0]; // pick first match
+      lastLookupResult = customer;
+      showCustomerCard(customer, data.results.length, data.companiesSearched);
+
+      // Auto-configure: set toNumber and callerPhone
+      document.getElementById('companySelect').value = customer.twilioNumber;
+      document.getElementById('callerPhone').value = customer.phone || phone;
+
+      setLookupStatus('found', `✅ Encontrado: ${data.results.length} resultado(s) en ${data.companiesSearched.length} compañía(s)`);
+    } else {
+      setLookupStatus('notfound', `❌ No encontrado en compañías configuradas (${data.companiesSearched.join(', ')}). Verifica el número o configura más compañías.`);
+    }
+  } catch (err) {
+    setLookupStatus('notfound', '❌ Error: ' + err.message + ' — ¿El servidor está corriendo?');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Buscar';
+  }
+}
+
+function setLookupStatus(cls, text) {
+  const el = document.getElementById('lookupStatus');
+  el.className = cls;
+  el.textContent = text;
+}
+
+function showCustomerCard(customer, totalResults, companiesSearched) {
+  const card = document.getElementById('customerCard');
+  const fullName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
+  
+  document.getElementById('cardCustomerName').textContent = '👤 ' + fullName;
+  document.getElementById('cardCompanyBadge').textContent = 'Compañía ' + customer.companyId;
+
+  const grid = document.getElementById('customerGrid');
+  grid.innerHTML = '';
+
+  const fields = [
+    { label: 'ID Cliente', value: customer.id, highlight: true },
+    { label: 'Compañía', value: customer.companyName || 'N/A' },
+    { label: 'Nombre', value: customer.firstName || '—' },
+    { label: 'Apellido', value: customer.lastName || '—' },
+    { label: 'Teléfono', value: customer.phone || '—', highlight: true },
+    { label: 'Account Manager ID', value: customer.accountManagerId || 'Sin asignar' },
+    { label: 'Company ID (BD)', value: customer.companyId },
+    { label: 'Twilio Number', value: customer.twilioNumber },
+  ];
+
+  for (const f of fields) {
+    const div = document.createElement('div');
+    div.className = 'field';
+    div.innerHTML = `<span class="lbl">${f.label}</span><span class="val${f.highlight ? ' highlight' : ''}">${f.value}</span>`;
+    grid.appendChild(div);
+  }
+
+  // Show auto-config message
+  const configMsg = document.getElementById('configAutoMsg');
+  configMsg.style.display = 'block';
+  document.getElementById('autoToNumber').textContent = customer.twilioNumber + ' → Compañía ' + customer.companyId;
+  document.getElementById('autoFromNumber').textContent = customer.phone || document.getElementById('callerPhone').value;
+
+  card.className = 'customer-card visible';
+}
+
+function hideCustomerCard() {
+  document.getElementById('customerCard').className = 'customer-card';
+  document.getElementById('configAutoMsg').style.display = 'none';
+}
 
 // ─── Web Speech API (STT del navegador — gratis) ───
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -160,7 +304,7 @@ function getToNumber() {
 
 // ─── Recording ───
 function toggleRecording() {
-  if (isPlaying) return; // don't record while IA is speaking
+  if (isPlaying) return;
   if (isRecording) {
     stopRecording();
   } else {
@@ -172,7 +316,7 @@ function startRecording() {
   if (!SpeechRecognition) return;
   
   recognition = new SpeechRecognition();
-  recognition.lang = 'es-ES'; // Start with Spanish, auto-detects somewhat
+  recognition.lang = 'es-ES';
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   recognition.continuous = false;
@@ -267,6 +411,11 @@ async function sendToServer(text) {
     addMessage('ia', data.replyText, meta);
     updateState(data.state);
     
+    // Update customer card with real-time state info if we have a customer match
+    if (data.state.customerId && lastLookupResult) {
+      updateRealTimeState(data.state);
+    }
+    
     // Play audio
     if (data.audioBase64) {
       await playAudioBase64(data.audioBase64);
@@ -282,6 +431,28 @@ async function sendToServer(text) {
   } catch(err) {
     setStatus('error', '❌ Error: ' + err.message);
     addMessage('ia', '⚠️ Error al contactar el servidor: ' + err.message, 'Error');
+  }
+}
+
+function updateRealTimeState(state) {
+  // Add live state fields to the customer card
+  const grid = document.getElementById('customerGrid');
+  // Remove previous live fields
+  grid.querySelectorAll('.live-field').forEach(el => el.remove());
+
+  const liveFields = [
+    state.customerId ? { label: '✓ IDENTIFICADO (ID)', value: state.customerId } : null,
+    state.customerConfirmedName ? { label: '✓ NOMBRE CONFIRMADO', value: state.customerConfirmedName } : null,
+    state.type !== null ? { label: 'TIPO CITA', value: ['Cotización','Instalación','Reparación'][state.type] } : null,
+    state.startDateISO ? { label: 'FECHA CITA', value: new Date(state.startDateISO).toLocaleString('es-ES') } : null,
+    state.duration ? { label: 'DURACIÓN', value: state.duration } : null,
+  ].filter(Boolean);
+
+  for (const f of liveFields) {
+    const div = document.createElement('div');
+    div.className = 'field live-field';
+    div.innerHTML = `<span class="lbl" style="color:#22c55e">${f.label}</span><span class="val highlight">${f.value}</span>`;
+    grid.appendChild(div);
   }
 }
 
@@ -368,7 +539,8 @@ function updateState(state) {
 
 // ─── Init: get first greeting ───
 window.addEventListener('load', () => {
-  sendToServer(null);
+  // Focus on phone input instead of auto-starting conversation
+  document.getElementById('customerPhone').focus();
 });
 </script>
 </body>

@@ -855,7 +855,125 @@ askType -> askDate -> [askTime] -> askDuration -> confirmSummary -> creatingAppo
 | 12 | Audio TTS funciona en voice-test.html | Verificar que se escucha el audio | [ ] |
 | 13 | Seleccion de idioma ingles funciona | Presionar 2 y verificar respuestas en ingles | [ ] |
 | 14 | Multi-tenant: cambiar compania y verificar datos | Cambiar selector de compania | [ ] |
+| 15 | Customer lookup por telefono muestra tarjeta | Buscar numero en voice-test.html | [ ] |
+| 16 | Auto-configuracion de toNumber y callerPhone | Buscar cliente y verificar campos auto-rellenados | [ ] |
 
 ---
 
-*Ultima actualizacion: Febrero 2026 — Version 3.0 (Flujo hibrido de identificacion de cliente)*
+## 15. Numeros de Telefono de Prueba
+
+### 15.1 Companias Configuradas (TWILIO_NUMBER_TO_COMPANY_MAP)
+
+Las siguientes companias estan configuradas en el sistema y pueden ser probadas end-to-end:
+
+| Twilio Number | Company ID | Nombre Compania |
+|---|---|---|
+| `+15550000001` | 2 | All Blinds Inc |
+| `+15550000002` | 163 | Sophie Blinds LLC |
+| `+15550000003` | 387 | (karla1@blindsbook.com — sin clientes con telefono) |
+
+### 15.2 Clientes de Compania 2 — All Blinds Inc (toNumber: +15550000001)
+
+| # | ID | Nombre | Apellido | Telefono | Notas |
+|---|---|---|---|---|---|
+| 1 | 1330 | Maria Elena | Rodriguez | `305-545-2936` | Nombre hispano completo |
+| 2 | 8122 | ADOLFO | ALVAREZ | `786-236-1132` | Nombre hispano |
+| 3 | 218 | Iris | Matos | `305-812-2468` | Nombre corto |
+| 4 | 11789 | Althea | Mcmillan | `305-904-2387` | Nombre anglosajon |
+| 5 | 13508 | Diosdado | Fernandez | `305-362-1270` | Nombre poco comun |
+| 6 | 11262 | Brian | Williams | `786-853-4538` | Nombre anglosajon |
+| 7 | 17259 | ONAY | TORRES | `305-582-6498` | Nombre hispano |
+| 8 | 14534 | Mark | Hambacher | `786-442-4989` | Nombre con apellido complejo |
+| 9 | 11469 | SONIA | IGLESIAS | `954-438-4043` | Area code 954 (Broward) |
+| 10 | 7777 | Bernadin | Goindoo | `305-336-2201` | Nombre internacional |
+| 11 | 4530 | JORGE | LOPEZ | `786-239-4584` | Nombre muy comun (posible multi-match) |
+| 12 | 7036 | MARIA | IBARRA | `305-726-4672` | Nombre muy comun |
+
+### 15.3 Clientes de Compania 163 — Sophie Blinds LLC (toNumber: +15550000002)
+
+| # | ID | Nombre | Apellido | Telefono | Notas |
+|---|---|---|---|---|---|
+| 1 | 20646 | Mabel | Mendoza | `305-323-2397` | Nombre hispano |
+| 2 | 19519 | Debie | Lima | `305-792-1773` | Nombre corto |
+| 3 | 18608 | PAULINO | HERNANDEZ | `786-236-0929` | Nombre hispano |
+| 4 | 22121 | Jorge | Tubella | `305-970-7356` | Apellido poco comun |
+| 5 | 19071 | BETTY | LOPEZ | `786-718-7027` | Nombre comun |
+| 6 | 21312 | NAUSSEN | JEFFERY | `954-684-6077` | Area code 954 |
+| 7 | 29368 | Cris | Broward | `954-614-5572` | Area code 954 |
+| 8 | 23484 | Russ | Nordahl | `404-384-2663` | Area code 404 (Atlanta, fuera de FL) |
+| 9 | 19810 | Yaris | Vale | `954-775-0118` | Nombre unico |
+| 10 | 23875 | BLAKE | LICKTEIG | `305-522-1365` | Apellido dificil de pronunciar |
+| 11 | 19177 | Natasha | Ragoonana | `305-613-2662` | Nombre con apellido complejo |
+| 12 | 23299 | JOSE | GONZALEZ | `305-219-0502` | Nombre muy comun (test multi-match) |
+
+### 15.4 Como Usar los Numeros de Prueba
+
+#### Flujo con Busqueda de Cliente (voice-test.html)
+
+1. Abrir `http://localhost:4000/test/voice-test.html`
+2. En el campo **"Busqueda de Cliente por Telefono"** escribir un numero de la tabla (ej: `305-545-2936`)
+3. Presionar **Buscar** — el sistema consulta `/debug/customer-lookup` en las 3 companias configuradas
+4. Se muestra la **tarjeta del cliente** con:
+   - ID, Nombre completo, Compania, Telefono, Account Manager
+   - **toNumber** y **Caller ID** se configuran automaticamente
+5. Presionar **Nueva conversacion** para iniciar el flujo de voz/texto
+6. La IA debe identificar al cliente por el Caller ID y saludarlo por nombre
+
+#### Flujo Manual (sin busqueda)
+
+1. Seleccionar la compania en el dropdown
+2. Escribir el telefono del cliente en **Caller ID** (ej: `305-545-2936`)
+3. Presionar **Nueva conversacion**
+4. La IA identifica al cliente y continua el flujo
+
+### 15.5 Escenarios de Prueba por Tipo
+
+| Escenario | Telefono Sugerido | Compania | Que Verificar |
+|---|---|---|---|
+| Match unico hispano | `305-545-2936` (Maria Elena Rodriguez) | 2 | Identifica y saluda en espanol |
+| Match unico anglosajon | `786-853-4538` (Brian Williams) | 2 | Identifica y ofrece ingles |
+| Nombre muy comun (multi-match) | `786-239-4584` (Jorge Lopez) | 2 | Si hay multiples Jorge, pide desambiguar |
+| Area code diferente (954) | `954-438-4043` (Sonia Iglesias) | 2 | Funciona con area code Broward |
+| Area code fuera de FL | `404-384-2663` (Russ Nordahl) | 163 | Funciona con area code Atlanta |
+| Apellido dificil | `305-522-1365` (Blake Lickteig) | 163 | La IA pronuncia correctamente |
+| Telefono no registrado | `999-999-9999` | — | Pide nombre al no encontrar |
+| Sin Caller ID | (dejar vacio) | 2 | Pide nombre directamente |
+| Compania diferente | `305-323-2397` (Mabel Mendoza) | 163 | Verifica que busca en compania 163 |
+| Flujo completo cita | `305-362-1270` (Diosdado Fernandez) | 2 | Identificacion → tipo → fecha → crear cita |
+
+### 15.6 Endpoint de Busqueda (API Debug)
+
+**GET** `/debug/customer-lookup?phone={numero}`
+
+Busca el numero de telefono en todas las companias del `TWILIO_NUMBER_TO_COMPANY_MAP`.
+
+**Ejemplo:**
+```
+GET http://localhost:4000/debug/customer-lookup?phone=305-545-2936
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "phone": "305-545-2936",
+  "companiesSearched": [2, 163, 387],
+  "totalResults": 1,
+  "results": [
+    {
+      "id": 1330,
+      "firstName": "Maria Elena",
+      "lastName": "Rodriguez",
+      "companyName": null,
+      "phone": "305-545-2936",
+      "accountManagerId": null,
+      "companyId": 2,
+      "twilioNumber": "+15550000001"
+    }
+  ]
+}
+```
+
+---
+
+*Ultima actualizacion: Julio 2025 — Version 4.0 (Busqueda de cliente por telefono + datos en tiempo real)*
