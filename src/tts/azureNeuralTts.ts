@@ -29,9 +29,6 @@ export async function synthesizeAzureMp3(
     throw new Error('Azure TTS no está configurado (AZURE_SPEECH_KEY/AZURE_SPEECH_REGION)');
   }
 
-  // Voces neurales optimizadas para tono cálido de receptionist
-  // es-MX-DaliaNeural: voz femenina mexicana, natural para público LATAM/US-Hispanic
-  // en-US-JennyNeural: voz femenina US, tono amable y profesional
   const voiceName =
     language === 'en'
       ? env.azureTtsVoiceEn || 'en-US-JennyNeural'
@@ -39,7 +36,6 @@ export async function synthesizeAzureMp3(
 
   const langTag = language === 'en' ? 'en-US' : 'es-MX';
 
-  // SSML enriquecido con pausas y prosodia naturales
   const enrichedBody = enrichSsmlBody(escapeXml(text));
 
   const ssml =

@@ -1,14 +1,13 @@
-# Script de prueba por chat (POST /debug/chat)
-# Requiere que el servicio esté corriendo en http://localhost:4000
+# Chat test script (POST /debug/chat)
+# Requires service running at http://localhost:4000
 
 $baseUrl = "http://localhost:4000"
 $callId = "test-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
-Write-Host "=== Prueba de RecepcionistIA por Chat ===" -ForegroundColor Cyan
+Write-Host "=== RecepcionistIA Chat Test ===" -ForegroundColor Cyan
 Write-Host "CallId: $callId" -ForegroundColor Gray
 Write-Host ""
 
-# Función helper para hacer POST
 function Invoke-ChatTurn {
     param([string]$text)
     
@@ -20,11 +19,11 @@ function Invoke-ChatTurn {
     try {
         $response = Invoke-RestMethod -Uri "$baseUrl/debug/chat" -Method POST -Body $body -ContentType "application/json"
         
-        Write-Host "Usuario: $text" -ForegroundColor Yellow
-        Write-Host "IA: $($response.replyText)" -ForegroundColor Green
-        Write-Host "Estado: $($response.state.step)" -ForegroundColor Gray
-        Write-Host "Cliente ID: $($response.state.customerId)" -ForegroundColor Gray
-        Write-Host "Tipo: $($response.state.type)" -ForegroundColor Gray
+        Write-Host "User: $text" -ForegroundColor Yellow
+        Write-Host "AI: $($response.replyText)" -ForegroundColor Green
+        Write-Host "State: $($response.state.step)" -ForegroundColor Gray
+        Write-Host "Customer ID: $($response.state.customerId)" -ForegroundColor Gray
+        Write-Host "Type: $($response.state.type)" -ForegroundColor Gray
         Write-Host "---" -ForegroundColor DarkGray
         Write-Host ""
         
@@ -35,33 +34,33 @@ function Invoke-ChatTurn {
     }
 }
 
-# Flujo de prueba completo
-Write-Host "1. Seleccionando idioma (1=Español)..." -ForegroundColor Cyan
+# Full test flow
+Write-Host "1. Selecting language (1=Spanish)..." -ForegroundColor Cyan
 $r1 = Invoke-ChatTurn "1"
 Start-Sleep -Seconds 1
 
-Write-Host "2. Indicando tipo de cita (cotización)..." -ForegroundColor Cyan
+Write-Host "2. Selecting appointment type (quote)..." -ForegroundColor Cyan
 $r2 = Invoke-ChatTurn "cotización"
 Start-Sleep -Seconds 1
 
-Write-Host "3. Dando nombre/teléfono del cliente..." -ForegroundColor Cyan
+Write-Host "3. Providing customer name/phone..." -ForegroundColor Cyan
 $r3 = Invoke-ChatTurn "John Doe"
 Start-Sleep -Seconds 1
 
-Write-Host "4. Indicando fecha..." -ForegroundColor Cyan
+Write-Host "4. Providing date..." -ForegroundColor Cyan
 $r4 = Invoke-ChatTurn "mañana a las 10"
 Start-Sleep -Seconds 1
 
-Write-Host "5. Confirmando hora..." -ForegroundColor Cyan
+Write-Host "5. Confirming time..." -ForegroundColor Cyan
 $r5 = Invoke-ChatTurn "10 de la mañana"
 Start-Sleep -Seconds 1
 
-Write-Host "6. Confirmando duración..." -ForegroundColor Cyan
+Write-Host "6. Confirming duration..." -ForegroundColor Cyan
 $r6 = Invoke-ChatTurn "está bien"
 Start-Sleep -Seconds 1
 
-Write-Host "=== Resumen final ===" -ForegroundColor Cyan
-Write-Host "Estado final: $($r6.state.step)" -ForegroundColor Yellow
+Write-Host "=== Final Summary ===" -ForegroundColor Cyan
+Write-Host "Final state: $($r6.state.step)" -ForegroundColor Yellow
 Write-Host "CustomerId: $($r6.state.customerId)" -ForegroundColor Yellow
-Write-Host "Tipo: $($r6.state.type)" -ForegroundColor Yellow
-Write-Host "Duración: $($r6.state.duration)" -ForegroundColor Yellow
+Write-Host "Type: $($r6.state.type)" -ForegroundColor Yellow
+Write-Host "Duration: $($r6.state.duration)" -ForegroundColor Yellow

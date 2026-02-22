@@ -1,10 +1,4 @@
-/**
- * Proveedor unificado de TTS.
- * Cadena de prioridad:
- *   1. Docker BlindsBook-IA (Piper local, $0)
- *   2. Azure Speech (neuronal, pago)
- *   3. null  → el consumidor usa Twilio <Say> como último recurso
- */
+// Unified TTS provider. Priority: Docker Piper (free) → Azure Speech (paid) → null (Twilio <Say> fallback)
 import { isDockerTtsConfigured, synthesizeDockerMp3 } from './dockerTts.js';
 import { isAzureTtsConfigured, synthesizeAzureMp3 } from './azureNeuralTts.js';
 
@@ -16,15 +10,10 @@ export interface TtsSynthResult {
   provider: 'docker' | 'azure';
 }
 
-/**
- * Intenta sintetizar con el proveedor de mayor prioridad disponible.
- * Devuelve `null` si ninguno está configurado/funciona → fallback a <Say>.
- */
 export async function synthesizeTts(
   text: string,
   language: SpeechLang,
 ): Promise<TtsSynthResult | null> {
-  // 1) Docker Piper (primera opción — gratis y local)
   if (isDockerTtsConfigured()) {
     try {
       const result = await synthesizeDockerMp3(text, language);
@@ -35,7 +24,6 @@ export async function synthesizeTts(
     }
   }
 
-  // 2) Azure Speech (segunda opción — neuronal de pago)
   if (isAzureTtsConfigured()) {
     try {
       const result = await synthesizeAzureMp3(text, language);
@@ -46,6 +34,5 @@ export async function synthesizeTts(
     }
   }
 
-  // 3) Ninguno disponible
   return null;
 }

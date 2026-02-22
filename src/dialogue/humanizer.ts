@@ -1,20 +1,9 @@
-/**
- * Utilidades de humanización para hacer que las respuestas del agente suenen
- * más naturales y menos robóticas.
- *
- * Dos niveles:
- *   1. Texto — variaciones de frases, fillers, interjecciones
- *   2. SSML  — pausas, prosodia y énfasis para TTS neural
- */
+// Humanization utilities for natural-sounding agent responses
 
-// ── Helpers ──────────────────────────────────────────────
-
-/** Selección aleatoria de un array */
+/** Pick a random element from an array */
 export function pick<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
 }
-
-// ── Variaciones de frases comunes ────────────────────────
 
 export const GREETINGS_ES = [
   '¡Hola, {name}! Bienvenido de nuevo a BlindsBook.',
@@ -102,9 +91,7 @@ export const GOODBYE_EN = [
   'It was a pleasure helping you. Have a wonderful day!',
 ] as const;
 
-// ── Fillers naturales ────────────────────────────────────
-
-/** Agrega un filler casual al inicio de una frase (con cierta probabilidad) */
+/** Optionally prepend a casual filler to a phrase */
 export function maybeFiller(lang: 'es' | 'en', probability = 0.3): string {
   if (Math.random() > probability) return '';
   const fillers =
@@ -114,27 +101,13 @@ export function maybeFiller(lang: 'es' | 'en', probability = 0.3): string {
   return pick(fillers);
 }
 
-// ── SSML Enhancement ─────────────────────────────────────
-
-/**
- * Transforma texto plano en SSML enriquecido con pausas naturales y prosodia.
- * Diseñado para voces neurales de Azure Speech.
- *
- * - Inserta <break> entre oraciones
- * - Envuelve en <prosody> con rate ligeramente bajo para claridad
- * - Agrega pausas más largas en saltos de línea
- */
+/** Transform plain text into SSML with natural pauses and prosody for Azure Speech neural voices. */
 export function enrichSsmlBody(text: string): string {
-  // 1) Reemplazar saltos de línea explícitos con break largo
   let result = text.replace(/\n/g, ' <break time="500ms"/> ');
 
-  // 2) Después de puntos seguidos de espacio, insertar break corto
-  //    Pero no tocar los que ya tienen break inyectado
   result = result.replace(/([.!?])\s+(?!<break)/g, '$1 <break time="300ms"/> ');
 
-  // 3) Después de comas, insertar micro-break para ritmo natural
   result = result.replace(/,\s+/g, ', <break time="150ms"/> ');
 
-  // 4) Envolver en prosody para hablar un poquito más lento y con tono cálido
   return `<prosody rate="95%" pitch="+1%">${result}</prosody>`;
 }

@@ -1,6 +1,6 @@
 FROM ollama/ollama:latest
 
-# Iniciar ollama en background, descargar modelo, y parar
+# Start ollama in background, download model, and stop
 RUN ollama serve & \
     sleep 5 && \
     ollama pull qwen2.5:3b && \

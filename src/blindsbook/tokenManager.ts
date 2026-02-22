@@ -1,93 +1,58 @@
-/**
- * TokenManager — Gestión automática de JWT para Receptionist IA
- *
- * Problema: Receptionist IA es un sistema de call center automatizado.
- * Nadie se "loguea" manualmente. Los JWT de la API BlindsBook expiran en 24h.
- *
- * Solución (flujo switch-company):
- *   1. Un superusuario (charlie) hace login → obtiene JWT base
- *   2. Para cada compañía objetivo, llama a POST /api/auth/switch-company
- *      → obtiene JWT específico con ese companyId
- *   3. Renovación proactiva: renueva tokens cuando queden < 1h de vida
- *   4. Retry en 401: si una llamada falla por token expirado, re-obtiene token
- *
- * Fallback: si una compañía tiene email/password propios, hace login directo.
- */
+// JWT token manager with auto-login, switch-company support, and proactive renewal
 
 import axios from 'axios';
 
-// ─── Tipos ───
-
 export interface CompanyCredentials {
   companyId: number;
-  /** Credenciales propias de la compañía (legacy — login directo) */
   email?: string;
   password?: string;
-  /** Token estático opcional (fallback si no hay credenciales) */
   token?: string;
 }
 
 interface CachedToken {
   jwt: string;
-  /** Timestamp (ms) cuando expira */
   expiresAt: number;
-  /** Timestamp (ms) cuando fue obtenido */
   obtainedAt: number;
 }
 
-// ─── Constantes ───
-
-/** Renovar cuando falte menos de este margen (ms) para expirar */
+// Renew when less than this margin remains before expiry
 const REFRESH_MARGIN_MS = 60 * 60 * 1000; // 1 hora antes de expirar
 
-/** Intervalo del timer de renovación proactiva (ms) */
+// Proactive renewal check interval
 const PROACTIVE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // cada 30 min
 
-/** Máximo de reintentos de login ante errores de red */
+// Max login retries on network errors
 const MAX_LOGIN_RETRIES = 3;
 
-/** Delay entre reintentos (ms) */
+// Delay between login retries
 const LOGIN_RETRY_DELAY_MS = 5_000;
-
-// ─── Clase TokenManager ───
 
 export class TokenManager {
   private apiBaseUrl: string;
-  private tokens = new Map<string, CachedToken>(); // key = companyId o "default"
+  private tokens = new Map<string, CachedToken>(); // key: companyId or "default"
   private credentials = new Map<string, CompanyCredentials>(); // key = companyId
   private defaultEmail: string | null = null;
   private defaultPassword: string | null = null;
   private defaultStaticToken: string | null = null;
   private proactiveTimer: ReturnType<typeof setInterval> | null = null;
-  private loginLocks = new Map<string, Promise<string | null>>(); // evitar login concurrentes
-  /** CompanyIds registradas que NO tienen credenciales propias → usan switch-company */
+  private loginLocks = new Map<string, Promise<string | null>>(); // prevents concurrent logins
+  // Companies without own credentials — use switch-company instead
   private switchCompanyTargets = new Set<number>();
 
   constructor(apiBaseUrl: string) {
     this.apiBaseUrl = apiBaseUrl.replace(/\/$/, '');
   }
 
-  /**
-   * Configura credenciales del superusuario (BLINDSBOOK_LOGIN_EMAIL/PASSWORD).
-   * Estas credenciales se usan para login base + switch-company.
-   */
   setDefaultCredentials(email: string | null, password: string | null): void {
     this.defaultEmail = email;
     this.defaultPassword = password;
   }
 
-  /**
-   * Configura un token estático por defecto (BLINDSBOOK_API_TOKEN).
-   * Solo se usa como último fallback si no hay credenciales.
-   */
   setDefaultStaticToken(token: string | null): void {
     this.defaultStaticToken = token || null;
   }
 
-  /**
-   * Registra una compañía. Si tiene email/password propios → login directo.
-   * Si no tiene → se usará switch-company con el superusuario.
-   */
+  /** If company has own email/password, uses direct login; otherwise uses switch-company. */
   registerCompany(companyId: number, creds: CompanyCredentials): void {
     const hasOwnCreds = !!(creds.email && creds.password);
     this.credentials.set(String(companyId), creds);
@@ -100,29 +65,26 @@ export class TokenManager {
     }
   }
 
-  /**
-   * Obtiene un JWT válido para la compañía dada (o default).
-   * Si el token está por expirar o no existe, hace login o switch-company.
-   */
+  /** Returns a valid JWT for the given company (or default). Triggers login/switch-company if needed. */
   async getToken(companyId?: number): Promise<string | null> {
     const key = companyId ? String(companyId) : 'default';
 
-    // 1. Verificar si hay un token cacheado y válido
+    // 1. Check for a cached valid token
     const cached = this.tokens.get(key);
     if (cached && !this.isExpiringSoon(cached)) {
       return cached.jwt;
     }
 
-    // 2. Obtener token fresco
+    // 2. Obtain a fresh token
     let freshToken: string | null = null;
 
     if (companyId && this.switchCompanyTargets.has(companyId)) {
-      // Compañía sin credenciales propias → switch-company
+      // Company without own credentials — use switch-company
       const baseJwt = this.tokens.get('default')?.jwt;
       if (baseJwt) {
         freshToken = await this.doSwitchCompany(baseJwt, companyId);
       }
-      // Si switch-company falla y no hay base token, intentar re-login del superusuario
+      // If switch-company fails and no base token, retry superuser login
       if (!freshToken && this.defaultEmail && this.defaultPassword) {
         const newBase = await this.login('default');
         if (newBase) {
@@ -130,19 +92,19 @@ export class TokenManager {
         }
       }
     } else {
-      // Login directo (default o compañía con credenciales propias)
+      // Direct login (default or company with own credentials)
       freshToken = await this.login(key);
     }
 
     if (freshToken) return freshToken;
 
-    // 3. Si el token cacheado AÚN no expiró (pero está por expirar), usarlo como fallback
+    // 3. If cached token hasn't expired yet (but expiring soon), use as fallback
     if (cached && cached.expiresAt > Date.now()) {
       console.warn(`[TokenManager] Token para ${key} próximo a expirar, usando mientras se renueva`);
       return cached.jwt;
     }
 
-    // 4. Último fallback: token estático de la compañía o el default
+    // 4. Last resort: static token from the company or the default
     if (companyId) {
       const creds = this.credentials.get(String(companyId));
       if (creds?.token) return creds.token;
@@ -153,20 +115,13 @@ export class TokenManager {
     return null;
   }
 
-  /**
-   * Invalida el token de una compañía (forzar re-login en la próxima llamada).
-   * Llamar cuando se recibe un 401.
-   */
+  /** Invalidate a company's token, forcing re-login on next call. Use after receiving a 401. */
   invalidateToken(companyId?: number): void {
     const key = companyId ? String(companyId) : 'default';
     this.tokens.delete(key);
     console.log(`[TokenManager] Token invalidado para ${key}`);
   }
 
-  /**
-   * Inicia el timer de renovación proactiva.
-   * Revisa cada 30 min si algún token está por expirar y lo renueva.
-   */
   startProactiveRenewal(): void {
     if (this.proactiveTimer) return;
 
@@ -174,14 +129,11 @@ export class TokenManager {
       await this.renewExpiringTokens();
     }, PROACTIVE_CHECK_INTERVAL_MS);
 
-    // También hacer una primera renovación inmediata
+    // Also run an immediate first renewal
     void this.renewExpiringTokens();
     console.log('[TokenManager] Renovación proactiva activada (cada 30 min)');
   }
 
-  /**
-   * Detiene el timer de renovación proactiva.
-   */
   stopProactiveRenewal(): void {
     if (this.proactiveTimer) {
       clearInterval(this.proactiveTimer);
@@ -189,13 +141,9 @@ export class TokenManager {
     }
   }
 
-  /**
-   * Hace login inicial para todas las compañías registradas + default.
-   * Para compañías sin credenciales propias, usa switch-company.
-   * Llamar al iniciar el servicio.
-   */
+  /** Initial login for all registered companies + default. Call on service start. */
   async loginAll(): Promise<void> {
-    // 1. Login del superusuario (default)
+    // 1. Superuser login (default)
     if (this.defaultEmail && this.defaultPassword) {
       const baseToken = await this.login('default');
       if (baseToken) {
@@ -205,7 +153,7 @@ export class TokenManager {
       }
     }
 
-    // 2. Compañías con credenciales propias → login directo
+    // 2. Companies with own credentials — direct login
     const directLoginPromises: Promise<void>[] = [];
     for (const [companyId, creds] of this.credentials) {
       if (creds.email && creds.password && !this.switchCompanyTargets.has(Number(companyId))) {
@@ -219,7 +167,7 @@ export class TokenManager {
     }
     await Promise.allSettled(directLoginPromises);
 
-    // 3. Compañías sin credenciales → switch-company usando el token del superusuario
+    // 3. Companies without credentials — switch-company using superuser token
     const baseJwt = this.tokens.get('default')?.jwt;
     if (baseJwt && this.switchCompanyTargets.size > 0) {
       const switchPromises: Promise<void>[] = [];
@@ -237,14 +185,9 @@ export class TokenManager {
     }
   }
 
-  // ─── Internos ───
-
-  /**
-   * Ejecuta login para un key dado (companyId o "default").
-   * Usa un lock para evitar logins concurrentes para la misma key.
-   */
+  /** Uses a lock to prevent concurrent logins for the same key. */
   private async login(key: string): Promise<string | null> {
-    // Si ya hay un login en progreso para este key, esperar el resultado
+    // If a login is already in progress for this key, wait for its result
     const existingLock = this.loginLocks.get(key);
     if (existingLock) return existingLock;
 
@@ -279,7 +222,7 @@ export class TokenManager {
           continue;
         }
 
-        // Decodificar exp del JWT
+        // Decode JWT exp
         const expiresAt = this.decodeJwtExp(jwt);
         this.tokens.set(key, {
           jwt,
@@ -296,7 +239,7 @@ export class TokenManager {
         const message = (err as Error)?.message || 'unknown error';
 
         if (status === 401 || status === 403) {
-          // Credenciales incorrectas → no reintentar
+          // Invalid credentials — do not retry
           console.error(`[TokenManager] Login ${key} RECHAZADO (${status}): credenciales incorrectas`);
           return null;
         }
@@ -321,7 +264,7 @@ export class TokenManager {
     if (creds?.email && creds?.password) {
       return { email: creds.email, password: creds.password };
     }
-    // Fallback a credenciales default
+    // Fallback to default credentials
     return { email: this.defaultEmail, password: this.defaultPassword };
   }
 
@@ -330,7 +273,7 @@ export class TokenManager {
   }
 
   private async renewExpiringTokens(): Promise<void> {
-    // 1. Renovar el token del superusuario primero (si expira pronto)
+    // 1. Renew the superuser token first (if expiring soon)
     const defaultCached = this.tokens.get('default');
     if (defaultCached && this.isExpiringSoon(defaultCached)) {
       const minutesLeft = Math.round((defaultCached.expiresAt - Date.now()) / 60_000);
@@ -342,9 +285,9 @@ export class TokenManager {
       }
     }
 
-    // 2. Renovar tokens de compañías
+    // 2. Renew company tokens
     for (const [key, cached] of this.tokens) {
-      if (key === 'default') continue; // ya renovado arriba
+      if (key === 'default') continue; // already renewed above
 
       if (this.isExpiringSoon(cached)) {
         const minutesLeft = Math.round((cached.expiresAt - Date.now()) / 60_000);
@@ -353,7 +296,7 @@ export class TokenManager {
         const companyId = Number(key);
 
         if (this.switchCompanyTargets.has(companyId)) {
-          // Compañía switch-company: usar el token del superusuario
+          // Switch-company: use the superuser token
           const baseJwt = this.tokens.get('default')?.jwt;
           if (baseJwt) {
             await this.doSwitchCompany(baseJwt, companyId);
@@ -361,7 +304,7 @@ export class TokenManager {
             console.warn(`[TokenManager] No hay token superusuario para renovar compañía ${key}`);
           }
         } else {
-          // Compañía con credenciales propias: refresh o login
+          // Company with own credentials: refresh or login
           const refreshed = await this.tryRefresh(key, cached.jwt);
           if (!refreshed) {
             await this.login(key);
@@ -371,10 +314,7 @@ export class TokenManager {
     }
   }
 
-  /**
-   * Llama a POST /api/auth/switch-company para obtener un JWT
-   * con el companyId deseado, usando el JWT del superusuario.
-   */
+  /** Calls POST /api/auth/switch-company to get a JWT for the target companyId using the superuser JWT. */
   private async doSwitchCompany(superuserJwt: string, targetCompanyId: number): Promise<string | null> {
     try {
       const response = await axios.post<{
@@ -415,10 +355,7 @@ export class TokenManager {
     }
   }
 
-  /**
-   * Intenta renovar un token usando POST /auth/refresh.
-   * Requiere que el token actual aún sea válido (no expirado).
-   */
+  /** Attempts token renewal via POST /auth/refresh. Requires non-expired current token. */
   private async tryRefresh(key: string, currentJwt: string): Promise<boolean> {
     try {
       const response = await axios.post<{
@@ -461,10 +398,7 @@ export class TokenManager {
     }
   }
 
-  /**
-   * Decodifica el campo `exp` de un JWT (sin verificar firma).
-   * Retorna timestamp en ms.
-   */
+  /** Decodes the `exp` field from a JWT (without verifying the signature). Returns timestamp in ms. */
   private decodeJwtExp(jwt: string): number {
     try {
       const payload = jwt.split('.')[1];
@@ -476,7 +410,7 @@ export class TokenManager {
     } catch {
       // ignore decode errors
     }
-    // Fallback: asumir 24h desde ahora
+    // Fallback: assume 24h from now
     return Date.now() + 24 * 60 * 60 * 1000;
   }
 

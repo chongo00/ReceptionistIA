@@ -17,12 +17,10 @@ export async function startServer() {
   const app = express();
   const env = loadEnv();
 
-  // Twilio envía datos como application/x-www-form-urlencoded por defecto
   app.use(bodyParser.urlencoded({ extended: false }));
-  app.use(bodyParser.json({ limit: '20mb' })); // 20 MB para imágenes OCR en base64
-  app.use(cors()); // CORS abierto para pruebas locales
+  app.use(bodyParser.json({ limit: '20mb' })); // 20 MB for base64 OCR images
+  app.use(cors());
 
-  // Servir páginas estáticas (ej. /test/voice-test.html)
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   app.use('/test', express.static(path.join(__dirname, '..', 'public')));
 
@@ -36,7 +34,7 @@ export async function startServer() {
     });
   });
 
-  // Audio TTS temporal (para Twilio <Play/>). Se llena desde el webhook al sintetizar.
+  // Temporary TTS audio for Twilio <Play/>
   app.get('/tts/:id.mp3', (req, res) => {
     const id = String(req.params.id || '');
     const audio = getAudio(id);
@@ -49,15 +47,12 @@ export async function startServer() {
     res.send(audio.bytes);
   });
 
-  // Modo 100% local/gratis (sin Twilio): simula turnos de conversación.
-  // POST /debug/chat { callId: "test", text: "hola", toNumber: "+123...", fromNumber: "+1555..." }
   app.post('/debug/chat', async (req, res) => {
     const callId = String(req.body?.callId || 'local-test');
     const text = typeof req.body?.text === 'string' ? req.body.text : null;
     const toNumber = typeof req.body?.toNumber === 'string' ? req.body.toNumber : null;
     const fromNumber = typeof req.body?.fromNumber === 'string' ? req.body.fromNumber : null;
 
-    // Permite probar multi-tenant en local simulando el número Twilio (To)
     if (toNumber) {
       const cfg = env.twilioNumberToCompanyMap.get(toNumber);
       if (cfg) setTokenForCompany(cfg);
@@ -65,7 +60,6 @@ export async function startServer() {
       clearTokenOverride();
     }
 
-    // Guardar Caller ID (From) en el state para identificación automática
     if (fromNumber) {
       const existingState = getConversationState(callId);
       if (!existingState.callerPhone) {
@@ -76,7 +70,6 @@ export async function startServer() {
 
     const result = await handleUserInput(callId, text);
 
-    // En modo debug, si llegamos al paso de creación, intentamos crear la cita realmente
     if (result.state.step === 'creatingAppointment' && result.state.type !== null) {
       const now = new Date();
       const isoNow = now.toISOString();
@@ -106,22 +99,15 @@ export async function startServer() {
       }
     }
     
-    // Guardar estado entre turnos (igual que en el webhook de Twilio)
     if (result.isFinished) {
       clearConversationState(callId);
     } else {
       setConversationState(callId, result.state);
     }
-    
+
     res.json(result);
   });
 
-  // ──────────── /debug/voice-chat ────────────
-  // Igual que /debug/chat pero devuelve AUDIO MP3 listo para reproducir en el navegador.
-  // POST { callId, text, toNumber?, fromNumber? }
-  // Response: { replyText, state, isFinished, ttsProvider, audioUrl }
-  //   audioUrl → GET /tts/<id>.mp3 (disponible 10 min)
-  //   También devuelve audioBase64 para reproducción inline.
   app.post('/debug/voice-chat', async (req, res) => {
     const callId = String(req.body?.callId || 'voice-test');
     const text = typeof req.body?.text === 'string' ? req.body.text : null;
@@ -135,7 +121,6 @@ export async function startServer() {
       clearTokenOverride();
     }
 
-    // Guardar Caller ID (From) en el state para identificación automática
     if (fromNumber) {
       const existingState = getConversationState(callId);
       if (!existingState.callerPhone) {
@@ -146,7 +131,6 @@ export async function startServer() {
 
     const result = await handleUserInput(callId, text);
 
-    // Crear cita si corresponde
     if (result.state.step === 'creatingAppointment' && result.state.type !== null && result.state.customerId) {
       const payload: CreateAppointmentPayload = {
         customerId: result.state.customerId,
@@ -164,14 +148,12 @@ export async function startServer() {
       }
     }
 
-    // Guardar estado
     if (result.isFinished) {
       clearConversationState(callId);
     } else {
       setConversationState(callId, result.state);
     }
 
-    // Sintetizar audio TTS
     let ttsProvider: string = 'none';
     let audioUrl: string | null = null;
     let audioBase64: string | null = null;
@@ -180,7 +162,6 @@ export async function startServer() {
       const ttsResult = await synthesizeTts(result.replyText, lang);
       if (ttsResult) {
         ttsProvider = ttsResult.provider;
-        // Guardar en cache para servir por URL
         const { putAudio } = await import('./tts/ttsCache.js');
         const id = putAudio(ttsResult.bytes, ttsResult.contentType, 10 * 60);
         audioUrl = `/tts/${id}.mp3`;
@@ -200,8 +181,6 @@ export async function startServer() {
     });
   });
 
-  // ──────────── /debug/play-audio ────────────
-  // GET endpoint simple: pasa texto y devuelve MP3 directo para el navegador.
   app.get('/debug/play-audio', async (req, res) => {
     const text = String(req.query.text || 'Hola, soy la recepcionista de BlindsBook.');
     const lang = String(req.query.lang || 'es') as 'es' | 'en';
@@ -220,10 +199,6 @@ export async function startServer() {
     res.status(503).json({ error: 'No TTS provider available' });
   });
 
-  // ──────────── OCR: /ocr/window-frame ────────────
-  // Detección de marco de ventana para la app Drapery Calculator.
-  // POST { image: "data:image/...;base64,...", width: number, height: number }
-  // → { rectangle: { topLeft, topRight, bottomLeft, bottomRight, width, height }, confidence }
   app.post('/ocr/window-frame', async (req, res) => {
     const { image, width, height } = req.body ?? {};
     if (!image || typeof image !== 'string' || !width || !height) {
@@ -245,7 +220,6 @@ export async function startServer() {
 
   app.use('/twilio', twilioVoiceRouter);
 
-  // ─── Inicializar TokenManager (auto-login + renovación) ───
   try {
     await initTokenManager();
   } catch (err) {

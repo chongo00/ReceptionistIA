@@ -13,18 +13,14 @@ import {
   type ToolCall,
 } from './ollamaClient.js';
 
-// ─── Resultado del agente ───
-
 export interface IdentificationAgentResult {
   replyText: string;
   customerId: number | null;
   customerName: string | null;
-  done: boolean; // true = identificado o transferido, salir del nivel 3
-  transfer: boolean; // true = no se pudo resolver, transferir a humano
+  done: boolean; // true = identified or transferred, exit level 3
+  transfer: boolean; // true = unresolved, transfer to human
   updatedHistory: LlmMessage[];
 }
-
-// ─── Tool definitions para el LLM ───
 
 const TOOLS: ToolDefinition[] = [
   {
@@ -88,8 +84,6 @@ const TOOLS: ToolDefinition[] = [
   },
 ];
 
-// ─── System prompt ───
-
 function buildSystemPrompt(language: 'es' | 'en', callerPhone: string | null): string {
   if (language === 'en') {
     return `You are a virtual receptionist for a blinds and shutters company.
@@ -133,8 +127,6 @@ Reglas:
 7. Habla en español.
 8. NUNCA inventes datos de clientes. Solo usa información de los resultados de herramientas.`;
 }
-
-// ─── Tool execution ───
 
 async function executeTool(
   toolCall: ToolCall,
@@ -193,8 +185,6 @@ async function executeTool(
   }
 }
 
-// ─── Parseo de marcadores en la respuesta del LLM ───
-
 interface ParsedMarker {
   type: 'identified' | 'created' | 'transfer' | 'none';
   customerId?: number;
@@ -227,12 +217,8 @@ function cleanMarkers(text: string): string {
     .trim();
 }
 
-// ─── Límites de seguridad ───
-
 const MAX_TOOL_CALLS_PER_TURN = 3;
-const MAX_TOOL_CALL_LOOPS = 3; // Max veces que el LLM puede hacer tool calls en un turno
-
-// ─── Agente principal ───
+const MAX_TOOL_CALL_LOOPS = 3; // Max tool call loops per turn
 
 export async function runIdentificationAgent(
   state: ConversationState,
@@ -240,7 +226,6 @@ export async function runIdentificationAgent(
 ): Promise<IdentificationAgentResult> {
   const history = [...state.llmConversationHistory];
 
-  // Si es la primera invocación, agregar system prompt
   if (history.length === 0) {
     history.push({
       role: 'system',
@@ -248,12 +233,10 @@ export async function runIdentificationAgent(
     });
   }
 
-  // Agregar mensaje del usuario
   if (userText) {
     history.push({ role: 'user', content: userText });
   }
 
-  // Verificar que Ollama esté disponible
   const available = await isOllamaAvailable();
   if (!available) {
     return {
@@ -268,7 +251,6 @@ export async function runIdentificationAgent(
     };
   }
 
-  // Ciclo de tool-calling: el LLM puede pedir herramientas varias veces
   let loopCount = 0;
   let lastContent = '';
 
@@ -277,16 +259,13 @@ export async function runIdentificationAgent(
 
     const response = await chatWithOllama(history as ChatMessage[], TOOLS);
 
-    // Si hay tool calls, ejecutarlas y volver a preguntar al LLM
     if (response.toolCalls.length > 0) {
-      // Registrar la respuesta del asistente con tool_calls
       history.push({
         role: 'assistant',
         content: response.content,
         tool_calls: response.toolCalls,
       });
 
-      // Ejecutar cada tool (máximo MAX_TOOL_CALLS_PER_TURN)
       const callsToProcess = response.toolCalls.slice(0, MAX_TOOL_CALLS_PER_TURN);
       for (const tc of callsToProcess) {
         let toolResult: string;
@@ -302,17 +281,14 @@ export async function runIdentificationAgent(
         });
       }
 
-      // Continuar el loop para que el LLM procese los resultados
       continue;
     }
 
-    // Sin tool calls: el LLM generó una respuesta de texto
     lastContent = response.content;
     history.push({ role: 'assistant', content: lastContent });
     break;
   }
 
-  // Parsear marcadores en la respuesta
   const marker = parseMarkers(lastContent);
   const cleanReply = cleanMarkers(lastContent);
 
@@ -354,7 +330,6 @@ export async function runIdentificationAgent(
       };
 
     default:
-      // El LLM hizo una pregunta al usuario — esperar siguiente turno
       return {
         replyText: lastContent,
         customerId: null,

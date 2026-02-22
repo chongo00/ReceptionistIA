@@ -1,27 +1,16 @@
-/**
- * Parseo de fechas y horas en lenguaje natural (español e inglés).
- * Usa chrono-node como motor.
- */
+// Natural language date/time parser using chrono-node
 import * as chrono from 'chrono-node';
 
 export interface ParsedDateTime {
-  /** Fecha completa en ISO 8601 (ej. "2026-02-16T10:00:00.000Z") */
+  /** Full date in ISO 8601 */
   iso: string;
-  /** Texto legible para confirmar al usuario */
+  /** Human-readable text for user confirmation */
   humanReadable: string;
-  /** true si chrono pudo extraer tanto fecha como hora */
+  /** true if both date and time were extracted */
   hasTime: boolean;
 }
 
-/**
- * Intenta extraer una fecha/hora del texto usando chrono-node.
- * Soporta español e inglés: "mañana a las 3", "next Monday at 2 PM", etc.
- *
- * @param text   Lo que dijo el usuario
- * @param lang   Idioma de la conversación
- * @param refDate Fecha de referencia — por defecto ahora
- * @returns ParsedDateTime si se pudo parsear, null si no.
- */
+/** Extract date/time from natural language text using chrono-node. */
 export function parseDateTimeFromText(
   text: string,
   lang: 'es' | 'en',
@@ -29,7 +18,6 @@ export function parseDateTimeFromText(
 ): ParsedDateTime | null {
   const ref = refDate ?? new Date();
 
-  // chrono-node tiene parsers dedicados para ES y EN
   const results =
     lang === 'es'
       ? chrono.es.parse(text, ref, { forwardDate: true })
@@ -43,7 +31,6 @@ export function parseDateTimeFromText(
   const date = startComp.date();
   const hasTime = startComp.isCertain('hour');
 
-  // Texto legible
   const humanReadable = formatHumanDate(date, lang, hasTime);
 
   return {
@@ -53,10 +40,7 @@ export function parseDateTimeFromText(
   };
 }
 
-/**
- * Combina una fecha ya parseada con una hora del siguiente turno.
- * Útil cuando askDate capturó solo fecha y askTime capturó hora.
- */
+/** Merge a time expression into an existing date (when date and time come from separate turns). */
 export function mergeTimeIntoDate(
   existingISO: string,
   timeText: string,
@@ -64,14 +48,12 @@ export function mergeTimeIntoDate(
 ): ParsedDateTime | null {
   const existingDate = new Date(existingISO);
 
-  // Usar la fecha existente como referencia para que chrono solo extraiga la hora
   const results =
     lang === 'es'
       ? chrono.es.parse(timeText, existingDate, { forwardDate: true })
       : chrono.en.parse(timeText, existingDate, { forwardDate: true });
 
   if (results.length === 0) {
-    // Intentar formatos directos: "10", "10:30", "3 pm", "15:00"
     const directTime = parseDirectTime(timeText);
     if (directTime) {
       const merged = new Date(existingDate);
@@ -94,7 +76,7 @@ export function mergeTimeIntoDate(
   };
 }
 
-/** Parse directo para "10", "10:30", "3pm", "15:00", "a las 10" */
+/** Direct parse for simple time patterns like "10", "10:30", "3pm", "15:00" */
 function parseDirectTime(text: string): { hours: number; minutes: number } | null {
   const cleaned = text
     .toLowerCase()
@@ -105,7 +87,6 @@ function parseDirectTime(text: string): { hours: number; minutes: number } | nul
     .replace(/de la noche/g, 'pm')
     .trim();
 
-  // "3:30 pm", "10:00 am", "15:00"
   const match = cleaned.match(/^(\d{1,2}):?(\d{2})?\s*(am|pm)?$/i);
   if (!match) return null;
 

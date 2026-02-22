@@ -7,20 +7,15 @@ import { TokenManager } from './tokenManager.js';
 const env = loadEnv();
 
 const api = axios.create({
-  // La API NestJS expone rutas bajo /api (ver swagger: /api-docs-json)
   baseURL: `${env.blindsbookApiBaseUrl.replace(/\/$/, '')}/api`,
   timeout: 10_000,
 });
 
-// ─── Token Manager (auto-login + renovación) ───
-
 const tokenManager = new TokenManager(env.blindsbookApiBaseUrl);
 
-// Configurar credenciales default
 tokenManager.setDefaultCredentials(env.blindsbookLoginEmail, env.blindsbookLoginPassword);
 tokenManager.setDefaultStaticToken(env.blindsbookApiToken || null);
 
-// Registrar compañías del mapa Twilio
 for (const [, config] of env.twilioNumberToCompanyMap) {
   tokenManager.registerCompany(config.companyId, {
     companyId: config.companyId,
@@ -30,7 +25,6 @@ for (const [, config] of env.twilioNumberToCompanyMap) {
   });
 }
 
-// Variable para indicar qué compañía está activa en la llamada actual
 let currentCompanyId: number | null = null;
 
 export function setTokenForCompany(companyConfig: { companyId: number; token?: string; email?: string; password?: string }): void {
@@ -41,25 +35,17 @@ export function clearTokenOverride(): void {
   currentCompanyId = null;
 }
 
-/**
- * Obtiene un JWT válido. Usa TokenManager para auto-login y renovación.
- */
 async function getBearerToken(): Promise<string | null> {
   return tokenManager.getToken(currentCompanyId ?? undefined);
 }
 
-/**
- * Inicializa el TokenManager: login inicial + renovación proactiva.
- * Llamar al arrancar el servidor.
- */
+/** Initialize TokenManager: initial login + proactive renewal. Call on server start. */
 export async function initTokenManager(): Promise<void> {
   console.log('[Auth] Iniciando TokenManager — auto-login para todas las compañías...');
   await tokenManager.loginAll();
   tokenManager.startProactiveRenewal();
   console.log('[Auth] TokenManager listo — tokens se renuevan automáticamente');
 }
-
-// ─── Interceptor: retry automático en 401 ───
 
 interface AxiosRequestConfigWithRetry extends InternalAxiosRequestConfig {
   _retry?: boolean;
@@ -70,14 +56,12 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const config = error.config as AxiosRequestConfigWithRetry | undefined;
 
-    // Si es 401 y no hemos reintentado aún
     if (error.response?.status === 401 && config && !config._retry) {
       config._retry = true;
 
       console.warn('[Auth] 401 recibido — invalidando token y reintentando login...');
       tokenManager.invalidateToken(currentCompanyId ?? undefined);
 
-      // Obtener nuevo token (forzará re-login)
       const newToken = await getBearerToken();
       if (newToken) {
         config.headers.Authorization = `Bearer ${newToken}`;
@@ -88,8 +72,6 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
-
-// ─── Helpers ───
 
 function normalizePhoneForSearch(phone: string): string {
   return phone.replace(/[\s\-\(\)\.\+]/g, '');
@@ -108,8 +90,6 @@ function mapCustomer(c: RawCustomer): CustomerMatch {
 
 type RawCustomer = Record<string, unknown>;
 
-// ─── Appointments ───
-
 export async function createAppointment(
   payload: CreateAppointmentPayload,
 ): Promise<Appointment> {
@@ -118,8 +98,6 @@ export async function createAppointment(
   const response = await api.post<Appointment>('/appointments', payload, { headers });
   return response.data;
 }
-
-// ─── Customer search (retorna array completo) ───
 
 type CustomersListResponse = {
   success: boolean;
@@ -152,15 +130,13 @@ export async function findCustomersBySearch(
   return raw.map(mapCustomer);
 }
 
-/** Retrocompatibilidad: retorna solo el primer ID */
+/** Legacy helper: returns only the first matching customer ID */
 export async function findCustomerIdBySearch(
   search: string,
 ): Promise<number | null> {
   const matches = await findCustomersBySearch(search, 5);
   return matches.length > 0 ? matches[0]!.id : null;
 }
-
-// ─── Búsqueda por teléfono (Caller ID) ───
 
 export async function findCustomersByPhone(
   phone: string,
@@ -169,8 +145,6 @@ export async function findCustomersByPhone(
   if (normalized.length < 3) return [];
   return findCustomersBySearch(normalized, 5);
 }
-
-// ─── Team members (vendedores/asesores) ───
 
 type TeamListResponse = {
   success: boolean;
@@ -213,8 +187,6 @@ export async function searchTeamMembers(
   });
 }
 
-// ─── Crear cliente nuevo ───
-
 export async function createNewCustomer(
   firstName: string,
   lastName: string,
@@ -232,13 +204,10 @@ export async function createNewCustomer(
   return { id };
 }
 
-// ─── Buscar clientes filtrados por AccountManagerId ───
-
 export async function findCustomersByAccountManager(
   search: string,
   accountManagerId: number,
 ): Promise<CustomerMatch[]> {
-  // Usamos la búsqueda general y filtramos en cliente por accountManagerId
   const all = await findCustomersBySearch(search, 20);
   return all.filter((c) => c.accountManagerId === accountManagerId);
 }

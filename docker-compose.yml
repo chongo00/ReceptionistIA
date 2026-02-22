@@ -1,14 +1,14 @@
 version: '3.8'
 
 services:
-  # -- BlindsBook Receptionist IA (Contenedor Único: Node.js + Ollama + qwen2.5:3b) --
+  # BlindsBook Receptionist IA (Node.js + Ollama + qwen2.5:3b)
   blindsbook-ia:
     build:
       context: .
       dockerfile: Dockerfile.unified
     ports:
       - "4000:4000"      # App Node.js
-      - "11434:11434"    # Ollama API (para debug/health checks)
+      - "11434:11434"    # Ollama API (debug/health checks)
     environment:
       - PORT=4000
       - BLINDSBOOK_API_BASE_URL=${BLINDSBOOK_API_BASE_URL:-http://host.docker.internal:3000}
@@ -32,14 +32,14 @@ services:
           memory: 6G
     restart: unless-stopped
 
-  # -- Piper TTS (descomentar si se usa TTS local separado) --
+  # Piper TTS (uncomment for separate local TTS)
   # blindsbook-tts:
   #   image: blindsbook-tts:latest
   #   ports:
   #     - "8000:8000"
   #   restart: unless-stopped
-  # Nota: El OCR (POST /ocr/window-frame) se sirve desde blindsbook-ia en puerto 4000.
-  # La app Drapery Calculator apunta a VITE_BLINDSBOOK_IA_URL=http://localhost:4000
+  # Note: OCR (POST /ocr/window-frame) is served from blindsbook-ia on port 4000.
+  # Drapery Calculator app uses VITE_BLINDSBOOK_IA_URL=http://localhost:4000
 
 volumes:
   ollama_data:

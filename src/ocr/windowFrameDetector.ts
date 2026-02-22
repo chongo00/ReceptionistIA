@@ -39,16 +39,13 @@ export async function detectWindowFrame(
   originalWidth: number,
   originalHeight: number,
 ): Promise<OcrResult | null> {
-  // Strip data-URL prefix if present
   const raw = imageBase64.replace(/^data:image\/[a-z+]+;base64,/, '');
   const buf = Buffer.from(raw, 'base64');
 
-  // Determine resize dimensions keeping aspect ratio
   const scale = Math.min(1, MAX_PROCESSING_SIZE / Math.max(originalWidth, originalHeight));
   const procW = Math.round(originalWidth * scale);
   const procH = Math.round(originalHeight * scale);
 
-  // 1-2: Resize + greyscale
   const grey = await sharp(buf)
     .resize(procW, procH, { fit: 'fill' })
     .greyscale()
@@ -79,7 +76,6 @@ export async function detectWindowFrame(
     binary[i] = edges[i] >= threshold ? 1 : 0;
   }
 
-  // 5: Build projection histograms
   const rowHist = new Float64Array(procH);
   const colHist = new Float64Array(procW);
   for (let y = 0; y < procH; y++) {
@@ -90,13 +86,11 @@ export async function detectWindowFrame(
     }
   }
 
-  // Normalize
   const maxRow = Math.max(...rowHist) || 1;
   const maxCol = Math.max(...colHist) || 1;
   for (let i = 0; i < procH; i++) rowHist[i] /= maxRow;
   for (let i = 0; i < procW; i++) colHist[i] /= maxCol;
 
-  // 6: Find dominant edge bands
   const peakThreshold = 0.35;
   const minGap = 0.15; // minimum gap between edges as fraction of dimension
 
@@ -107,7 +101,6 @@ export async function detectWindowFrame(
     return null;
   }
 
-  // Pick the outermost pair for each axis (most likely to be the window frame)
   const top = hPeaks[0];
   const bottom = hPeaks[hPeaks.length - 1];
   const left = vPeaks[0];
@@ -120,7 +113,6 @@ export async function detectWindowFrame(
     return null;
   }
 
-  // Map back to original coordinates
   const sX = originalWidth / procW;
   const sY = originalHeight / procH;
 

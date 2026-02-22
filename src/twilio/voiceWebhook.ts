@@ -20,18 +20,15 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   const speechResult =
     typeof req.body.SpeechResult === 'string' ? req.body.SpeechResult : null;
 
-  // Determinar compañía por número Twilio (To = número que recibió la llamada)
   const companyConfig = toNumber ? env.twilioNumberToCompanyMap.get(toNumber) : null;
   if (companyConfig) {
     setTokenForCompany(companyConfig);
     // eslint-disable-next-line no-console
     console.log(`[Twilio] Usando token para compañía ${companyConfig.companyId} (número: ${toNumber})`);
   } else if (env.blindsbookApiToken) {
-    // Fallback a token por defecto si no hay mapping
     clearTokenOverride();
   }
 
-  // Guardar Caller ID (From) en el state para identificación automática
   if (fromNumber) {
     const existingState = getConversationState(callId);
     if (!existingState.callerPhone) {
@@ -40,7 +37,6 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
     }
   }
 
-  // SpeechResult si existe, si no Digits, si no null
   const userText = speechResult || digits || null;
 
   const voiceResponse = new twilio.twiml.VoiceResponse();
@@ -48,19 +44,11 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   try {
     const { state, replyText, isFinished } = await handleUserInput(callId, userText);
 
-    // Si llegamos al paso de creación, mandamos una llamada de ejemplo a la API.
     if (state.step === 'creatingAppointment' && state.type !== null) {
-      // NOTA: En una implementación real, aquí habría que
-      // - Resolver customerId a partir de state.customerNameSpoken
-      // - Calcular startDateISO en base a lo que dijo el usuario
-      // Por ahora, solo mostramos cómo se llamaría a la API.
       const now = new Date();
       const isoNow = now.toISOString();
 
-      // Validaciones mínimas antes de intentar crear la cita
       if (!state.customerId) {
-        // En esta versión de ejemplo aún no resolvemos el customerId real.
-        // Evitamos crear citas inválidas.
         // eslint-disable-next-line no-console
         console.warn(
           'No se pudo crear la cita: falta customerId. Se requiere resolverlo contra la API de clientes.',
@@ -99,7 +87,6 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
       language: twilioLang,
     });
 
-    // Voz neuronal con TTS unificado (Docker Piper → Azure → Twilio Say fallback)
     const canUseTts = Boolean(env.publicBaseUrl && env.publicBaseUrl.startsWith('http'));
 
     if (canUseTts) {
@@ -116,7 +103,6 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
           // eslint-disable-next-line no-console
           console.log(`[TTS] Usando proveedor: ${ttsResult.provider}`);
         } else {
-          // Ningún proveedor disponible — usar voces neurales de Polly
           gather.say(
             {
               language: twilioLang,

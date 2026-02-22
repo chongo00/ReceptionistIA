@@ -3,8 +3,6 @@ import { loadEnv } from '../config/env.js';
 
 const env = loadEnv();
 
-// ─── Types ───
-
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
@@ -48,9 +46,7 @@ interface OllamaChatResponse {
   done: boolean;
 }
 
-// ─── Client ───
-
-const LLM_TIMEOUT = 30_000; // 30s — modelos pequeños en CPU pueden tardar
+const LLM_TIMEOUT = 30_000; // 30s — small CPU models can be slow
 
 export async function isOllamaAvailable(): Promise<boolean> {
   if (!env.ollamaUrl) return false;
@@ -75,8 +71,8 @@ export async function chatWithOllama(
     messages,
     stream: false,
     options: {
-      num_predict: 200,   // Máximo tokens de respuesta (respuestas cortas para voz)
-      temperature: 0.3,   // Baja temperatura para respuestas consistentes
+      num_predict: 200,   // Max response tokens (short for voice)
+      temperature: 0.3,   // Low temperature for consistent responses
     },
   };
 
@@ -92,7 +88,7 @@ export async function chatWithOllama(
 
   const msg = response.data.message;
 
-  // Normalizar tool_calls: Ollama devuelve arguments como objeto, OpenAI como string JSON
+  // Normalize tool_calls: Ollama returns arguments as object, OpenAI as JSON string
   const toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((tc, i) => ({
     id: `call_${i}`,
     type: 'function' as const,

@@ -22,11 +22,11 @@ export interface DialogueTurnResult {
   state: ConversationState;
   replyText: string;
   isFinished: boolean;
-  /** Audio MP3 sintetizado (solo se llena en endpoints que lo solicitan) */
+  /** Synthesized MP3 audio (only populated by endpoints that request it) */
   audioBase64?: string;
 }
 
-// En memoria para ejemplo; en producción usar Redis u otro almacén
+// In-memory store; use Redis in production
 const conversationStore = new Map<string, ConversationState>();
 
 export function getConversationState(callId: string): ConversationState {
@@ -49,8 +49,6 @@ export function clearConversationState(callId: string): void {
   conversationStore.delete(callId);
 }
 
-// ─── Helpers ───
-
 function typeLabel(type: number | null, lang: 'es' | 'en'): string {
   if (lang === 'en') return type === 0 ? 'quote' : type === 1 ? 'installation' : 'repair';
   return type === 0 ? 'cotización' : type === 1 ? 'instalación' : 'reparación';
@@ -70,8 +68,6 @@ function phoneLastDigits(phone: string | null, digits = 4): string {
 const MAX_IDENTIFICATION_ATTEMPTS = 3;
 const MAX_DISAMBIGUATION_DISPLAY = 3;
 
-// ─── Main handler ───
-
 export function handleUserInput(
   callId: string,
   userText: string | null,
@@ -83,9 +79,6 @@ export function handleUserInput(
 
   const run = async (): Promise<DialogueTurnResult> => {
     switch (state.step) {
-      // ══════════════════════════════════════════
-      //  IDIOMA
-      // ══════════════════════════════════════════
       case 'askLanguage': {
         const lower = trimmed.toLowerCase();
         if (trimmed === '1' || lower.includes('español') || lower.includes('spanish')) {
@@ -101,17 +94,12 @@ export function handleUserInput(
           };
         }
 
-        // Ir directamente a identificación por Caller ID (sin esperar input)
         return run();
       }
 
-      // ══════════════════════════════════════════
-      //  NIVEL 1: CALLER ID AUTOMÁTICO
-      // ══════════════════════════════════════════
       case 'identifyByCallerId': {
         const phone = state.callerPhone;
 
-        // Si no hay caller phone, ir directamente a nivel 2
         if (!phone) {
           state = { ...state, step: 'askCustomerName' };
           return {
@@ -124,16 +112,13 @@ export function handleUserInput(
           };
         }
 
-        // Buscar por teléfono
         let matches: CustomerMatch[] = [];
         try {
           matches = await findCustomersByPhone(phone);
         } catch {
-          // Si falla la API, ir a nivel 2
         }
 
         if (matches.length === 1) {
-          // ─── Match único: identificado ───
           const match = matches[0]!;
           const name = customerDisplayName(match);
           state = {
@@ -156,7 +141,6 @@ export function handleUserInput(
         }
 
         if (matches.length > 1 && matches.length <= 5) {
-          // ─── Múltiples matches: desambiguar ───
           state = { ...state, customerMatches: matches, step: 'disambiguateCustomer' };
           const nameSummary = matches
             .slice(0, MAX_DISAMBIGUATION_DISPLAY)
@@ -177,7 +161,6 @@ export function handleUserInput(
           };
         }
 
-        // ─── 0 matches o +5: ir a nivel 2 ───
         state = { ...state, step: 'askCustomerName' };
         return {
           state,
@@ -189,9 +172,6 @@ export function handleUserInput(
         };
       }
 
-      // ══════════════════════════════════════════
-      //  DESAMBIGUAR (múltiples matches)
-      // ══════════════════════════════════════════
       case 'disambiguateCustomer': {
         if (!trimmed) {
           return {
@@ -206,7 +186,6 @@ export function handleUserInput(
 
         const lower = trimmed.toLowerCase();
 
-        // Intentar match por número (1, 2, 3...)
         const numChoice = parseInt(trimmed, 10);
         if (numChoice >= 1 && numChoice <= state.customerMatches.length) {
           const match = state.customerMatches[numChoice - 1]!;
@@ -229,7 +208,6 @@ export function handleUserInput(
           };
         }
 
-        // Intentar match por nombre dentro de los matches existentes
         const nameMatch = state.customerMatches.find((m) => {
           const fullName = customerDisplayName(m).toLowerCase();
           return fullName.includes(lower) || lower.includes(fullName);
@@ -248,7 +226,6 @@ export function handleUserInput(
           return run();
         }
 
-        // No encaja con ninguno de la lista — buscar más amplio
         state = {
           ...state,
           customerNameSpoken: trimmed,
@@ -258,9 +235,6 @@ export function handleUserInput(
         return run();
       }
 
-      // ══════════════════════════════════════════
-      //  NIVEL 2: BUSCAR POR NOMBRE/TELÉFONO
-      // ══════════════════════════════════════════
       case 'askCustomerName': {
         if (!trimmed) {
           return {
@@ -279,11 +253,9 @@ export function handleUserInput(
         try {
           matches = await findCustomersBySearch(trimmed, 5);
         } catch {
-          // API error — tratar como 0 matches
         }
 
         if (matches.length === 1) {
-          // ─── 1 match: confirmar identidad ───
           const match = matches[0]!;
           state = {
             ...state,
@@ -295,7 +267,6 @@ export function handleUserInput(
         }
 
         if (matches.length > 1) {
-          // ─── Múltiples: desambiguar ───
           state = { ...state, customerMatches: matches, customerNameSpoken: trimmed, step: 'disambiguateCustomer' };
           const nameSummary = matches
             .slice(0, MAX_DISAMBIGUATION_DISPLAY)
@@ -316,9 +287,7 @@ export function handleUserInput(
           };
         }
 
-        // ─── 0 matches ───
         if (state.identificationAttempts >= MAX_IDENTIFICATION_ATTEMPTS) {
-          // Agoté intentos — ir a nivel 3 (LLM)
           state = { ...state, step: 'llmFallback', customerNameSpoken: trimmed };
           return run();
         }
@@ -333,9 +302,6 @@ export function handleUserInput(
         };
       }
 
-      // ══════════════════════════════════════════
-      //  CONFIRMAR IDENTIDAD
-      // ══════════════════════════════════════════
       case 'confirmCustomerIdentity': {
         const match = state.customerMatches[0];
         if (!match) {
@@ -345,7 +311,6 @@ export function handleUserInput(
 
         const name = customerDisplayName(match);
 
-        // Si acabamos de llegar (sin input del usuario), preguntar confirmación
         if (!trimmed) {
           return {
             state,
@@ -404,7 +369,6 @@ export function handleUserInput(
           };
         }
 
-        // Respuesta ambigua
         return {
           state,
           replyText: t(
@@ -415,11 +379,7 @@ export function handleUserInput(
         };
       }
 
-      // ══════════════════════════════════════════
-      //  NIVEL 3: LLM FALLBACK (Ollama)
-      // ══════════════════════════════════════════
       case 'llmFallback': {
-        // Si es la primera entrada al nivel 3, generar respuesta inicial sin input del usuario
         const isFirstEntry = state.llmConversationHistory.length === 0;
         const userInput = isFirstEntry ? '' : trimmed;
 
@@ -429,7 +389,6 @@ export function handleUserInput(
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error('LLM agent error:', err);
-          // Fallback directo: ofrecer registrar como nuevo
           state = { ...state, step: 'askCustomerName' };
           return {
             state,
@@ -445,7 +404,6 @@ export function handleUserInput(
 
         if (result.done) {
           if (result.transfer) {
-            // No se pudo resolver — informar y terminar
             return {
               state: { ...state, step: 'completed' },
               replyText: result.replyText || t(
@@ -457,7 +415,6 @@ export function handleUserInput(
           }
 
           if (result.customerId) {
-            // Identificado o creado por el LLM
             const name = result.customerName || state.customerNameSpoken || '';
             state = {
               ...state,
@@ -478,7 +435,6 @@ export function handleUserInput(
           }
         }
 
-        // El LLM hizo una pregunta — esperar siguiente turno
         return {
           state,
           replyText: result.replyText,
@@ -486,12 +442,8 @@ export function handleUserInput(
         };
       }
 
-      // ══════════════════════════════════════════
-      //  SALUDO (post-identificación)
-      // ══════════════════════════════════════════
       case 'greeting': {
         if (trimmed) {
-          // El usuario ya dijo algo — intentar parsear como tipo de cita
           state = { ...state, step: 'askType' };
           return run();
         }
@@ -503,9 +455,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: false };
       }
 
-      // ══════════════════════════════════════════
-      //  TIPO DE CITA
-      // ══════════════════════════════════════════
       case 'askType': {
         const lower = trimmed.toLowerCase();
         let typeText = '';
@@ -537,9 +486,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: false };
       }
 
-      // ══════════════════════════════════════════
-      //  FECHA
-      // ══════════════════════════════════════════
       case 'askDate': {
         if (!trimmed) {
           return {
@@ -584,9 +530,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: false };
       }
 
-      // ══════════════════════════════════════════
-      //  HORA
-      // ══════════════════════════════════════════
       case 'askTime': {
         if (!trimmed) {
           return {
@@ -621,9 +564,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: false };
       }
 
-      // ══════════════════════════════════════════
-      //  DURACIÓN
-      // ══════════════════════════════════════════
       case 'askDuration': {
         const lower = trimmed.toLowerCase();
         let duration = state.duration ?? '01:00:00';
@@ -653,9 +593,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: false };
       }
 
-      // ══════════════════════════════════════════
-      //  CONFIRMACIÓN
-      // ══════════════════════════════════════════
       case 'confirmSummary': {
         const lower = trimmed.toLowerCase();
         const isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
@@ -695,9 +632,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: false };
       }
 
-      // ══════════════════════════════════════════
-      //  CREACIÓN
-      // ══════════════════════════════════════════
       case 'creatingAppointment': {
         state = { ...state, step: 'completed' };
         const goodbye = t(pick(GOODBYE_ES), pick(GOODBYE_EN));
@@ -708,9 +642,6 @@ export function handleUserInput(
         return { state, replyText, isFinished: true };
       }
 
-      // ══════════════════════════════════════════
-      //  FALLBACK
-      // ══════════════════════════════════════════
       default: {
         const replyText = t(
           'Disculpe, hubo un problema. Vamos a empezar de nuevo. ¿La visita es para cotización, instalación o reparación?',
