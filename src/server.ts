@@ -10,8 +10,10 @@ import { setTokenForCompany, clearTokenOverride, createAppointment, initTokenMan
 import type { CreateAppointmentPayload } from './models/appointments.js';
 import { getAudio } from './tts/ttsCache.js';
 import { synthesizeTts } from './tts/ttsProvider.js';
-import { isOllamaAvailable } from './llm/ollamaClient.js';
+import { getAvailableLlmProvider } from './llm/llmClient.js';
+import { isAzureTtsConfigured } from './tts/azureNeuralTts.js';
 import { detectWindowFrame } from './ocr/windowFrameDetector.js';
+import { detectWindowFrameWithVision, isAzureVisionConfigured } from './ocr/azureVisionOcr.js';
 
 export async function startServer() {
   const app = express();
@@ -25,12 +27,14 @@ export async function startServer() {
   app.use('/test', express.static(path.join(__dirname, '..', 'public')));
 
   app.get('/health', async (_req, res) => {
-    const ollamaOk = await isOllamaAvailable();
+    const llmProvider = await getAvailableLlmProvider();
     res.json({
       ok: true,
       service: 'blindsbook-ia',
       status: 'healthy',
-      ollama: ollamaOk ? 'connected' : 'unavailable',
+      llm: llmProvider,    // 'azure-openai' | 'ollama' | 'none'
+      tts: isAzureTtsConfigured() ? 'azure-speech' : 'twilio-say-fallback',
+      ocr: isAzureVisionConfigured() ? 'azure-openai-vision + edge-detection' : 'edge-detection-only',
     });
   });
 
@@ -257,6 +261,17 @@ export async function startServer() {
       return;
     }
     try {
+      // Tier 1: Azure OpenAI Vision (GPT-4o) — high accuracy
+      if (isAzureVisionConfigured()) {
+        const visionResult = await detectWindowFrameWithVision(image, Number(width), Number(height));
+        if (visionResult) {
+          res.json(visionResult);
+          return;
+        }
+        console.warn('[OCR] Azure Vision returned no result, falling back to edge detection');
+      }
+
+      // Tier 2: Edge detection (sharp + Laplacian)
       const result = await detectWindowFrame(image, Number(width), Number(height));
       if (!result) {
         res.json({ error: 'no_window', message: 'No window frame detected' });

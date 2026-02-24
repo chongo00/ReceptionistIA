@@ -24,6 +24,11 @@ export interface EnvConfig {
   dockerTtsUrl: string | null;
   ollamaUrl: string | null;
   ollamaModel: string;
+  // Azure OpenAI (primary LLM)
+  azureOpenaiEndpoint: string | null;
+  azureOpenaiApiKey: string | null;
+  azureOpenaiDeployment: string | null;
+  azureOpenaiApiVersion: string;
 }
 
 export function loadEnv(): EnvConfig {
@@ -66,6 +71,12 @@ export function loadEnv(): EnvConfig {
   const ollamaUrl = process.env.OLLAMA_URL || null;
   const ollamaModel = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
 
+  // Azure OpenAI
+  const azureOpenaiEndpoint = process.env.AZURE_OPENAI_ENDPOINT || null;
+  const azureOpenaiApiKey = process.env.AZURE_OPENAI_API_KEY || null;
+  const azureOpenaiDeployment = process.env.AZURE_OPENAI_DEPLOYMENT || null;
+  const azureOpenaiApiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-10-21';
+
   return {
     port,
     twilioAuthToken,
@@ -86,6 +97,10 @@ export function loadEnv(): EnvConfig {
     dockerTtsUrl,
     ollamaUrl,
     ollamaModel,
+    azureOpenaiEndpoint,
+    azureOpenaiApiKey,
+    azureOpenaiDeployment,
+    azureOpenaiApiVersion,
   };
 }
 

@@ -6,11 +6,13 @@ import {
   findCustomersByAccountManager,
 } from '../blindsbook/appointmentsClient.js';
 import {
-  chatWithOllama,
-  isOllamaAvailable,
-  type ChatMessage,
-  type ToolDefinition,
-  type ToolCall,
+  chatWithLlm,
+  isLlmAvailable,
+} from './llmClient.js';
+import type {
+  ChatMessage,
+  ToolDefinition,
+  ToolCall,
 } from './ollamaClient.js';
 
 export interface IdentificationAgentResult {
@@ -237,7 +239,7 @@ export async function runIdentificationAgent(
     history.push({ role: 'user', content: userText });
   }
 
-  const available = await isOllamaAvailable();
+  const available = await isLlmAvailable();
   if (!available) {
     return {
       replyText: state.language === 'en'
@@ -257,7 +259,7 @@ export async function runIdentificationAgent(
   while (loopCount < MAX_TOOL_CALL_LOOPS) {
     loopCount++;
 
-    const response = await chatWithOllama(history as ChatMessage[], TOOLS);
+    const response = await chatWithLlm(history as ChatMessage[], TOOLS);
 
     if (response.toolCalls.length > 0) {
       history.push({

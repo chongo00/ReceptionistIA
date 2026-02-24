@@ -17,6 +17,7 @@ import {
   SORRY_ES, SORRY_EN,
   GOODBYE_ES, GOODBYE_EN,
 } from './humanizer.js';
+import { llmProcessStep, buildStepContext, isConversationalLlmAvailable } from './conversationalLlm.js';
 
 export interface DialogueTurnResult {
   state: ConversationState;
@@ -184,9 +185,34 @@ export function handleUserInput(
           };
         }
 
-        const lower = trimmed.toLowerCase();
+        // Try LLM to understand choice (number or name)
+        const llmDisambig = await llmProcessStep(state, trimmed, buildStepContext(state));
 
-        const numChoice = parseInt(trimmed, 10);
+        let numChoice = NaN;
+        let nameMatch: CustomerMatch | undefined;
+
+        if (llmDisambig?.data?.choiceNumber != null) {
+          numChoice = Number(llmDisambig.data.choiceNumber);
+        } else if (llmDisambig?.data?.nameSpoken) {
+          const spokenName = String(llmDisambig.data.nameSpoken).toLowerCase();
+          nameMatch = state.customerMatches.find((m) => {
+            const fullName = customerDisplayName(m).toLowerCase();
+            return fullName.includes(spokenName) || spokenName.includes(fullName);
+          });
+        }
+
+        if (isNaN(numChoice)) {
+          // Rule-based fallback: try parsing number or name match
+          numChoice = parseInt(trimmed, 10);
+          if (isNaN(numChoice) && !nameMatch) {
+            const lower = trimmed.toLowerCase();
+            nameMatch = state.customerMatches.find((m) => {
+              const fullName = customerDisplayName(m).toLowerCase();
+              return fullName.includes(lower) || lower.includes(fullName);
+            });
+          }
+        }
+
         if (numChoice >= 1 && numChoice <= state.customerMatches.length) {
           const match = state.customerMatches[numChoice - 1]!;
           const name = customerDisplayName(match);
@@ -200,18 +226,13 @@ export function handleUserInput(
           };
           return {
             state,
-            replyText: t(
+            replyText: llmDisambig?.reply || t(
               `${pick(PERFECT_ES)}, ${name}. ${pick(HOW_CAN_HELP_ES)}`,
               `${pick(PERFECT_EN)}, ${name}. ${pick(HOW_CAN_HELP_EN)}`,
             ),
             isFinished: false,
           };
         }
-
-        const nameMatch = state.customerMatches.find((m) => {
-          const fullName = customerDisplayName(m).toLowerCase();
-          return fullName.includes(lower) || lower.includes(fullName);
-        });
 
         if (nameMatch) {
           const name = customerDisplayName(nameMatch);
@@ -224,6 +245,11 @@ export function handleUserInput(
             step: 'confirmCustomerIdentity',
           };
           return run();
+        }
+
+        // If LLM answered off-topic, return its reply
+        if (llmDisambig && !llmDisambig.data.choiceNumber && !llmDisambig.data.nameSpoken) {
+          return { state, replyText: llmDisambig.reply, isFinished: false };
         }
 
         state = {
@@ -247,11 +273,20 @@ export function handleUserInput(
           };
         }
 
+        // Try LLM to extract the search query (name/phone/email) and handle off-topic
+        const llmName = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const searchText = (llmName?.data?.searchQuery as string) || trimmed;
+
         state = { ...state, identificationAttempts: state.identificationAttempts + 1 };
+
+        // If LLM detected off-topic and couldn't extract searchQuery, show its reply
+        if (llmName && !llmName.data.searchQuery) {
+          return { state, replyText: llmName.reply, isFinished: false };
+        }
 
         let matches: CustomerMatch[] = [];
         try {
-          matches = await findCustomersBySearch(trimmed, 5);
+          matches = await findCustomersBySearch(searchText, 5);
         } catch {
         }
 
@@ -260,14 +295,14 @@ export function handleUserInput(
           state = {
             ...state,
             customerMatches: [match],
-            customerNameSpoken: trimmed,
+            customerNameSpoken: searchText,
             step: 'confirmCustomerIdentity',
           };
           return run();
         }
 
         if (matches.length > 1) {
-          state = { ...state, customerMatches: matches, customerNameSpoken: trimmed, step: 'disambiguateCustomer' };
+          state = { ...state, customerMatches: matches, customerNameSpoken: searchText, step: 'disambiguateCustomer' };
           const nameSummary = matches
             .slice(0, MAX_DISAMBIGUATION_DISPLAY)
             .map((m, i) => {
@@ -288,15 +323,15 @@ export function handleUserInput(
         }
 
         if (state.identificationAttempts >= MAX_IDENTIFICATION_ATTEMPTS) {
-          state = { ...state, step: 'llmFallback', customerNameSpoken: trimmed };
+          state = { ...state, step: 'llmFallback', customerNameSpoken: searchText };
           return run();
         }
 
         return {
           state,
           replyText: t(
-            `No encontré a "${trimmed}" en el sistema. ¿Podría intentar con otro nombre, teléfono o email?`,
-            `I couldn't find "${trimmed}" in the system. Could you try with another name, phone number, or email?`,
+            `No encontré a "${searchText}" en el sistema. ¿Podría intentar con otro nombre, teléfono o email?`,
+            `I couldn't find "${searchText}" in the system. Could you try with another name, phone number, or email?`,
           ),
           isFinished: false,
         };
@@ -322,11 +357,23 @@ export function handleUserInput(
           };
         }
 
-        const lower = trimmed.toLowerCase();
-        const isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
-          || lower.includes('correcto') || lower.includes('correct') || lower.includes('ok')
-          || lower.includes('soy yo') || lower.includes("that's me") || lower.includes('exacto');
-        const isNo = lower.includes('no') || lower.includes('not me') || lower.includes('otro');
+        // Try LLM for natural yes/no + off-topic handling
+        const llmConfirmId = await llmProcessStep(state, trimmed, buildStepContext(state));
+        let isYes = false;
+        let isNo = false;
+
+        if (llmConfirmId?.data?.confirmed === true) {
+          isYes = true;
+        } else if (llmConfirmId?.data?.confirmed === false) {
+          isNo = true;
+        } else {
+          // Rule-based fallback
+          const lower = trimmed.toLowerCase();
+          isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
+            || lower.includes('correcto') || lower.includes('correct') || lower.includes('ok')
+            || lower.includes('soy yo') || lower.includes("that's me") || lower.includes('exacto');
+          isNo = lower.includes('no') || lower.includes('not me') || lower.includes('otro');
+        }
 
         if (isYes) {
           state = {
@@ -443,7 +490,25 @@ export function handleUserInput(
       }
 
       case 'greeting': {
+        // If user already said something, try LLM to understand intent
         if (trimmed) {
+          const llm = await llmProcessStep(state, trimmed, buildStepContext(state));
+          if (llm && llm.data.appointmentType != null) {
+            const aType = Number(llm.data.appointmentType);
+            if ([0, 1, 2].includes(aType)) {
+              state = { ...state, type: aType as 0 | 1 | 2, step: 'askDate' };
+              return { state, replyText: llm.reply, isFinished: false };
+            }
+          }
+          if (llm && llm.data.wantsAppointment) {
+            state = { ...state, step: 'askType' };
+            return { state, replyText: llm.reply, isFinished: false };
+          }
+          if (llm) {
+            // Off-topic — LLM answered and steered back
+            return { state, replyText: llm.reply, isFinished: false };
+          }
+          // Fallback: just advance
           state = { ...state, step: 'askType' };
           return run();
         }
@@ -456,6 +521,21 @@ export function handleUserInput(
       }
 
       case 'askType': {
+        // Try LLM first for natural understanding
+        const llmType = await llmProcessStep(state, trimmed, buildStepContext(state));
+        if (llmType && llmType.data.appointmentType != null) {
+          const aType = Number(llmType.data.appointmentType);
+          if ([0, 1, 2].includes(aType)) {
+            state = { ...state, type: aType as 0 | 1 | 2, step: 'askDate' };
+            return { state, replyText: llmType.reply, isFinished: false };
+          }
+        }
+        if (llmType) {
+          // LLM understood but couldn't extract type — user went off-topic, LLM steers back
+          return { state, replyText: llmType.reply, isFinished: false };
+        }
+
+        // Rule-based fallback
         const lower = trimmed.toLowerCase();
         let typeText = '';
         if (lower.includes('coti') || lower.includes('quote')) {
@@ -498,9 +578,17 @@ export function handleUserInput(
           };
         }
 
-        const parsed = parseDateTimeFromText(trimmed, state.language);
+        // Try LLM for off-topic handling — the date extraction still uses chrono-node
+        const llmDate = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const dateTextForParsing = (llmDate?.data?.dateText as string) || trimmed;
+
+        const parsed = parseDateTimeFromText(dateTextForParsing, state.language);
 
         if (!parsed) {
+          // If LLM gave a reply (user was off-topic), use it
+          if (llmDate && !llmDate.data.dateText) {
+            return { state, replyText: llmDate.reply, isFinished: false };
+          }
           return {
             state,
             replyText: t(
@@ -542,10 +630,18 @@ export function handleUserInput(
           };
         }
 
+        // Try LLM to extract time text + handle off-topic
+        const llmTime = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const timeTextForParsing = (llmTime?.data?.timeText as string) || trimmed;
+
         const baseISO = state.startDateISO ?? new Date().toISOString();
-        const merged = mergeTimeIntoDate(baseISO, trimmed, state.language);
+        const merged = mergeTimeIntoDate(baseISO, timeTextForParsing, state.language);
 
         if (!merged) {
+          // If LLM gave a reply (user was off-topic), use it
+          if (llmTime && !llmTime.data.timeText) {
+            return { state, replyText: llmTime.reply, isFinished: false };
+          }
           return {
             state,
             replyText: t(
@@ -557,6 +653,9 @@ export function handleUserInput(
         }
 
         state = { ...state, startDateISO: merged.iso, step: 'askDuration' };
+        if (llmTime?.reply) {
+          return { state, replyText: llmTime.reply, isFinished: false };
+        }
         const replyText = t(
           `${pick(PERFECT_ES)}, la cita será el ${merged.humanReadable}. La duración estándar es una hora. ¿Le parece bien, o prefiere otra duración?`,
           `${pick(PERFECT_EN)}, the appointment will be on ${merged.humanReadable}. Standard duration is one hour. Does that work, or would you prefer a different duration?`,
@@ -565,14 +664,22 @@ export function handleUserInput(
       }
 
       case 'askDuration': {
-        const lower = trimmed.toLowerCase();
+        // Try LLM first
+        const llmDur = await llmProcessStep(state, trimmed, buildStepContext(state));
         let duration = state.duration ?? '01:00:00';
-        if (lower.includes('media hora') || lower.includes('half hour') || lower.includes('30 min')) {
-          duration = '00:30:00';
-        } else if (lower.includes('dos horas') || lower.includes('2 horas') || lower.includes('two hours') || lower.includes('2 hours')) {
-          duration = '02:00:00';
-        } else if (lower.includes('hora y media') || lower.includes('hour and a half') || lower.includes('1.5') || lower.includes('90 min')) {
-          duration = '01:30:00';
+
+        if (llmDur?.data?.duration && typeof llmDur.data.duration === 'string') {
+          duration = llmDur.data.duration;
+        } else {
+          // Rule-based fallback
+          const lower = trimmed.toLowerCase();
+          if (lower.includes('media hora') || lower.includes('half hour') || lower.includes('30 min')) {
+            duration = '00:30:00';
+          } else if (lower.includes('dos horas') || lower.includes('2 horas') || lower.includes('two hours') || lower.includes('2 hours')) {
+            duration = '02:00:00';
+          } else if (lower.includes('hora y media') || lower.includes('hour and a half') || lower.includes('1.5') || lower.includes('90 min')) {
+            duration = '01:30:00';
+          }
         }
 
         state = { ...state, duration, step: 'confirmSummary' };
@@ -594,11 +701,23 @@ export function handleUserInput(
       }
 
       case 'confirmSummary': {
-        const lower = trimmed.toLowerCase();
-        const isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
-          || lower.includes('correcto') || lower.includes('correct') || lower.includes('ok')
-          || lower.includes('bien') || lower.includes('confirma');
-        const isNo = lower.includes('no') || lower.includes('cancel') || lower.includes('empez');
+        // Try LLM first for natural yes/no understanding
+        const llmConfirm = await llmProcessStep(state, trimmed, buildStepContext(state));
+        let isYes = false;
+        let isNo = false;
+
+        if (llmConfirm?.data?.confirmed === true) {
+          isYes = true;
+        } else if (llmConfirm?.data?.confirmed === false) {
+          isNo = true;
+        } else {
+          // Rule-based fallback
+          const lower = trimmed.toLowerCase();
+          isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
+            || lower.includes('correcto') || lower.includes('correct') || lower.includes('ok')
+            || lower.includes('bien') || lower.includes('confirma');
+          isNo = lower.includes('no') || lower.includes('cancel') || lower.includes('empez');
+        }
 
         if (isNo) {
           const prevLang = state.language;

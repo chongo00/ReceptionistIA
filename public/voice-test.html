@@ -75,6 +75,16 @@
 
   @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
   .customer-card.visible { animation: fadeIn .3s ease; }
+
+  /* ─── Language Selection Panel ─── */
+  .lang-panel { text-align:center; }
+  .lang-panel p { color:var(--mute); font-size:.9rem; margin-bottom:12px; }
+  .lang-buttons { display:flex; gap:12px; justify-content:center; }
+  .btn-lang { padding:14px 32px; font-size:1rem; font-weight:700; border-radius:10px; border:2px solid var(--border); background:#334155; color:var(--text); cursor:pointer; transition:all .2s; min-width:200px; }
+  .btn-lang:hover { border-color:var(--accent); background:#1e3a5f; }
+  .btn-lang:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-lang .flag { font-size:1.4rem; display:block; margin-bottom:4px; }
+  #langPanel.done { display:none; }
 </style>
 </head>
 <body>
@@ -132,13 +142,27 @@
       <button id="modeVoice" class="active" onclick="setMode('voice')">🎤 Voz</button>
       <button id="modeText" onclick="setMode('text')">⌨️ Texto</button>
     </div>
-    <button class="btn btn-sm btn-primary" onclick="resetConversation()">🔄 Nueva conversación</button>
+    <button class="btn btn-sm btn-primary" onclick="resetConversationFull()">🔄 Nueva conversación</button>
+  </div>
+</div>
+
+<!-- LANGUAGE SELECTION -->
+<div class="panel lang-panel" id="langPanel">
+  <h2>🌐 Paso 1 — Selecciona el Idioma</h2>
+  <p>Esto inicia la conversación y envía la selección de idioma a la IA</p>
+  <div class="lang-buttons">
+    <button class="btn-lang" id="btnLangEs" onclick="startWithLanguage('1')">
+      <span class="flag">🇪🇸</span> Español — Presione 1
+    </button>
+    <button class="btn-lang" id="btnLangEn" onclick="startWithLanguage('2')">
+      <span class="flag">🇺🇸</span> English — Press 2
+    </button>
   </div>
 </div>
 
 <!-- STATUS -->
 <div class="panel">
-  <div id="status" class="status idle">Listo — Busca un cliente arriba o presiona el botón para hablar</div>
+  <div id="status" class="status idle">Listo — Busca un cliente arriba, luego selecciona el idioma</div>
   <div class="state-bar" id="stateBar"></div>
 </div>
 
@@ -182,6 +206,8 @@ let isRecording = false;
 let isPlaying = false;
 let currentAudio = null;
 let lastLookupResult = null; // last successful customer lookup
+let speechRetryCount = 0;
+const MAX_SPEECH_RETRIES = 2;
 
 // ─── Customer Lookup ───
 async function lookupCustomer() {
@@ -334,8 +360,25 @@ function startRecording() {
       setStatus('idle', 'No se detectó voz — intenta de nuevo');
     } else if (event.error === 'not-allowed') {
       setStatus('error', '⚠️ Permiso de micrófono denegado. Permite el acceso en tu navegador.');
+    } else if (event.error === 'network') {
+      // Edge uses cloud speech services — retry automatically
+      if (speechRetryCount < MAX_SPEECH_RETRIES) {
+        speechRetryCount++;
+        setStatus('listening', `🔄 Reconectando al servicio de voz (intento ${speechRetryCount}/${MAX_SPEECH_RETRIES})...`);
+        isRecording = false;
+        setTimeout(() => startRecording(), 800);
+        return;
+      }
+      speechRetryCount = 0;
+      setStatus('error', '⚠️ Error de red en reconocimiento de voz. Edge requiere conexión a Internet para STT. Cambiando a modo Texto...');
+      // Auto-switch to text mode after network failure
+      setTimeout(() => setMode('text'), 1500);
+    } else if (event.error === 'audio-capture') {
+      setStatus('error', '⚠️ No se detectó micrófono. Verifica que esté conectado y permitido.');
+    } else if (event.error === 'aborted') {
+      setStatus('idle', 'Reconocimiento cancelado');
     } else {
-      setStatus('error', `Error de reconocimiento: ${event.error}`);
+      setStatus('error', `Error de reconocimiento: ${event.error}. Prueba con modo Texto.`);
     }
     isRecording = false;
     updateRecordButton();
@@ -349,9 +392,14 @@ function startRecording() {
   try {
     recognition.start();
     isRecording = true;
+    speechRetryCount = 0;
     updateRecordButton();
     setStatus('listening', '🎤 Escuchando... Habla ahora');
   } catch(e) {
+    if (e.message && e.message.includes('already started')) {
+      // Edge sometimes throws if recognition is already running
+      return;
+    }
     setStatus('error', 'No se pudo iniciar el micrófono: ' + e.message);
   }
 }
@@ -537,9 +585,38 @@ function updateState(state) {
   ].filter(Boolean).join('');
 }
 
-// ─── Init: get first greeting ───
+// ─── Language selection → starts conversation ───
+async function startWithLanguage(langChoice) {
+  const btnEs = document.getElementById('btnLangEs');
+  const btnEn = document.getElementById('btnLangEn');
+  btnEs.disabled = true;
+  btnEn.disabled = true;
+  setStatus('speaking', '⏳ Iniciando conversación...');
+
+  // 1. Send null to get the initial greeting ("Para español presione 1...")
+  await sendToServer(null);
+
+  // 2. Small delay then send language choice
+  await new Promise(r => setTimeout(r, 500));
+  addMessage('user', langChoice === '1' ? 'Español (1)' : 'English (2)', 'Selección de idioma');
+  await sendToServer(langChoice);
+
+  // 3. Hide language panel — conversation is active
+  document.getElementById('langPanel').className = 'panel lang-panel done';
+}
+
+function resetConversationFull() {
+  resetConversation();
+  // Show language panel again
+  document.getElementById('langPanel').className = 'panel lang-panel';
+  document.getElementById('btnLangEs').disabled = false;
+  document.getElementById('btnLangEn').disabled = false;
+  lastLookupResult = null;
+  hideCustomerCard();
+}
+
+// ─── Init ───
 window.addEventListener('load', () => {
-  // Focus on phone input instead of auto-starting conversation
   document.getElementById('customerPhone').focus();
 });
 </script>

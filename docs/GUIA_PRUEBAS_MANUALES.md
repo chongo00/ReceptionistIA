@@ -976,4 +976,252 @@ GET http://localhost:4000/debug/customer-lookup?phone=305-545-2936
 
 ---
 
-*Ultima actualizacion: Julio 2025 — Version 4.0 (Busqueda de cliente por telefono + datos en tiempo real)*
+## 16. Guion de Pruebas Paso a Paso (con numeros reales)
+
+> **Instrucciones:** Lee cada guion en orden. Abre `http://localhost:4000/test/voice-test.html`.
+> Puedes usar **modo Voz** (microfono) o **modo Texto** (escribir). Si Edge da error de red
+> en modo Voz, el sistema cambiara automaticamente a modo Texto.
+> Marca [x] en cada paso que funcione correctamente.
+
+---
+
+### GUION 1: Identificacion automatica por Caller ID (match unico, espanol)
+
+**Cliente:** Maria Elena Rodriguez — Tel: `305-545-2936` — Compania 2 (All Blinds Inc)
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Buscar cliente | Escribir `305-545-2936` en busqueda → Buscar | Tarjeta: Maria Elena Rodriguez, Compania 2 | [ ] |
+| 2 | Verificar auto-config | — | Compania = All Blinds Inc, Caller ID = 305-545-2936 | [ ] |
+| 3 | Seleccionar idioma | Click en **Espanol — Presione 1** | Se envia saludo + idioma, IA responde con identificacion | [ ] |
+| 4 | Verificar identificacion | — | IA dice "Hola Maria Elena!" o similar, step=greeting | [ ] |
+| 5 | Estado | Revisar barra inferior | customerId con valor, customerConfirmedName con nombre | [ ] |
+
+**Resultado esperado:** Identificacion automatica sin preguntar nombre. Directo a greeting.
+
+---
+
+### GUION 2: Identificacion automatica (match unico, ingles)
+
+**Cliente:** Brian Williams — Tel: `786-853-4538` — Compania 2 (All Blinds Inc)
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea todo | [ ] |
+| 2 | Buscar cliente | Escribir `786-853-4538` → Buscar | Tarjeta: Brian Williams, Compania 2 | [ ] |
+| 3 | Seleccionar idioma | Click en **English — Press 2** | IA identifica y saluda en ingles: "Hello Brian!" | [ ] |
+| 4 | Verificar idioma | Revisar barra inferior | Lang: en | [ ] |
+| 5 | Pedir cita | Decir/escribir: `I need an appointment` | "Is this for a quote, installation, or repair?" | [ ] |
+
+**Resultado esperado:** Flujo completo en ingles con cliente anglosajon.
+
+---
+
+### GUION 3: Telefono no registrado → Nivel 2 (pedir nombre)
+
+**Telefono FALSO:** `999-999-9999` — No existe en ninguna compania
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
+| 2 | Config manual | Seleccionar Compania 2 en dropdown. Escribir `999-999-9999` en Caller ID | — | [ ] |
+| 3 | Seleccionar idioma | Click en **Espanol — Presione 1** | IA dice: "No reconozco este numero. Me podria dar su nombre?" | [ ] |
+| 4 | Verificar estado | Revisar barra | step=askCustomerName | [ ] |
+| 5 | Dar nombre real | Escribir: `Maria Elena Rodriguez` | "Encontre a Maria Elena Rodriguez. Es usted?" | [ ] |
+| 6 | Confirmar | Escribir: `si` | "Perfecto, Maria Elena Rodriguez. En que puedo ayudarle?" | [ ] |
+| 7 | Verificar estado | Revisar barra | step=greeting, customerId con valor | [ ] |
+
+**Resultado esperado:** Nivel 1 falla → pasa a Nivel 2 → busca por nombre → confirma identidad.
+
+---
+
+### GUION 4: Nombre comun con multiples resultados (desambiguacion)
+
+**Cliente:** JORGE LOPEZ — Tel: `786-239-4584` — Compania 2
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
+| 2 | Config manual | Compania 2, Caller ID: `999-888-7777` (falso) | — | [ ] |
+| 3 | Seleccionar idioma | Click en **Espanol** | "No reconozco. Me podria dar su nombre?" | [ ] |
+| 4 | Dar nombre comun | Escribir: `Jorge Lopez` | Si hay multiples: "Encontre varios clientes: 1. Jorge Lopez (tel. ***4584)..." | [ ] |
+| 5a | Elegir por numero | Escribir: `1` | "Perfecto, Jorge Lopez." → step=greeting | [ ] |
+| 5b | (Alternativa) Si match unico | — | "Encontre a Jorge Lopez. Es usted?" → escribir "si" | [ ] |
+
+**Resultado esperado:** Nombre comun puede dar multi-match → desambiguacion o match unico.
+
+---
+
+### GUION 5: 3 intentos fallidos → Nivel 3 LLM
+
+**Compania 2** — Caller ID falso
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion + config | Compania 2, Caller ID: `999-111-2222` | — | [ ] |
+| 2 | Seleccionar idioma | Click **Espanol** | "No reconozco. Me podria dar su nombre?" | [ ] |
+| 3 | Intento fallido 1 | Escribir: `ZZZZZZ XXXXXX` | "No encontre a ZZZZZZ XXXXXX. Podria intentar con otro nombre?" | [ ] |
+| 4 | Intento fallido 2 | Escribir: `YYYYYY WWWWWW` | "No encontre a YYYYYY WWWWWW..." | [ ] |
+| 5 | Intento fallido 3 | Escribir: `AAAAAA BBBBBB` | Pasa a Nivel 3: "No pude encontrarlo. Recuerda el nombre de su vendedor?" | [ ] |
+| 6 | Verificar estado | Revisar barra | step=llmFallback, identificationAttempts=3 | [ ] |
+| 7 | Indicar cliente nuevo | Escribir: `Es mi primera vez` | LLM: "Le gustaria que lo registre como cliente nuevo?" | [ ] |
+| 8 | Dar nombre nuevo | Escribir: `Roberto Gonzalez` | LLM crea cliente → paso a greeting | [ ] |
+
+**Resultado esperado:** 3 fallos → Nivel 3 → registro de cliente nuevo via LLM.
+
+---
+
+### GUION 6: Sin Caller ID → pide nombre directo
+
+**Compania 163 (Sophie Blinds LLC)** — Sin Caller ID
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
+| 2 | Config manual | Compania 163, **borrar** el campo Caller ID (dejar vacio) | — | [ ] |
+| 3 | Seleccionar idioma | Click **Espanol** | "Bienvenido a BlindsBook. Me podria dar su nombre o telefono?" | [ ] |
+| 4 | Dar nombre | Escribir: `Mabel Mendoza` | "Encontre a Mabel Mendoza. Es usted?" | [ ] |
+| 5 | Confirmar | Escribir: `si` | "Perfecto, Mabel Mendoza." → step=greeting | [ ] |
+
+**Resultado esperado:** Sin caller phone → directo a Nivel 2 → busca por nombre.
+
+---
+
+### GUION 7: Compania diferente (Sophie Blinds LLC, compania 163)
+
+**Cliente:** PAULINO HERNANDEZ — Tel: `786-236-0929` — Compania 163
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
+| 2 | Buscar cliente | Escribir `786-236-0929` → Buscar | Tarjeta: PAULINO HERNANDEZ, Compania 163 | [ ] |
+| 3 | Verificar auto-config | — | Compania = Sophie Blinds LLC (+15550000002), Caller ID = 786-236-0929 | [ ] |
+| 4 | Seleccionar idioma | Click **Espanol** | IA identifica: "Hola Paulino!" | [ ] |
+| 5 | Verificar multi-tenant | Revisar barra | customerId con valor correcto para compania 163 | [ ] |
+
+**Resultado esperado:** El sistema busca en la compania correcta (163, no 2).
+
+---
+
+### GUION 8: Flujo COMPLETO de cita (identificacion → cita creada)
+
+**Cliente:** Diosdado Fernandez — Tel: `305-362-1270` — Compania 2
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | Step | OK? |
+|---|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Reset | — | [ ] |
+| 2 | Buscar cliente | `305-362-1270` → Buscar | Tarjeta: Diosdado Fernandez | — | [ ] |
+| 3 | Seleccionar idioma | Click **Espanol** | "Hola Diosdado!" | greeting | [ ] |
+| 4 | Pedir cita | `quiero agendar una cita` | "Es para cotizacion, instalacion o reparacion?" | askType | [ ] |
+| 5 | Tipo | `cotizacion` | "Perfecto, agendaremos cotizacion. Para que fecha?" | askDate | [ ] |
+| 6 | Fecha | `manana` | "Para el [fecha]. A que hora?" | askTime | [ ] |
+| 7 | Hora | `a las 10 de la manana` | "Cita el [fecha] 10:00. Duracion 1 hora. Esta bien?" | askDuration | [ ] |
+| 8 | Duracion | `si` | Resumen completo: Tipo, Cliente, Fecha, Hora, Duracion. "Correcto?" | confirmSummary | [ ] |
+| 9 | Confirmar | `si` | "Su cita ha sido registrada exitosamente." | completed | [ ] |
+| 10 | Verificar tarjeta | Revisar customer card | Debe mostrar: TIPO CITA, FECHA CITA, NOMBRE CONFIRMADO en verde | — | [ ] |
+
+**Resultado esperado:** Flujo completo desde identificacion hasta creacion de cita en la BD.
+
+---
+
+### GUION 9: Flujo completo en INGLES
+
+**Cliente:** Althea Mcmillan — Tel: `305-904-2387` — Compania 2
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | Step | OK? |
+|---|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Reset | — | [ ] |
+| 2 | Buscar cliente | `305-904-2387` → Buscar | Tarjeta: Althea Mcmillan | — | [ ] |
+| 3 | Seleccionar idioma | Click **English — Press 2** | "Hello Althea!" | greeting | [ ] |
+| 4 | Pedir cita | `I need to schedule an appointment` | "Is this for a quote, installation, or repair?" | askType | [ ] |
+| 5 | Tipo | `installation` | "We'll schedule an installation. What date?" | askDate | [ ] |
+| 6 | Fecha y hora | `next Monday at 2 PM` | "Appointment on [date] 2:00 PM. Duration 1 hour. OK?" | askDuration | [ ] |
+| 7 | Confirmar duracion | `yes` | Resumen en ingles. "Is this correct?" | confirmSummary | [ ] |
+| 8 | Confirmar | `yes` | "Your appointment has been registered." | completed | [ ] |
+
+**Resultado esperado:** Todo el flujo en ingles, fecha+hora combinadas saltan askTime.
+
+---
+
+### GUION 10: Area code diferente (954 — Broward) y cancelar cita
+
+**Cliente:** SONIA IGLESIAS — Tel: `954-438-4043` — Compania 2
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | Step | OK? |
+|---|---|---|---|---|---|
+| 1 | Nueva conversacion | Click **Nueva conversacion** | Reset | — | [ ] |
+| 2 | Buscar cliente | `954-438-4043` → Buscar | Tarjeta: SONIA IGLESIAS, Compania 2 | — | [ ] |
+| 3 | Seleccionar idioma | Click **Espanol** | "Hola Sonia!" | greeting | [ ] |
+| 4 | Pedir cita | `necesito una cita` | "Cotizacion, instalacion o reparacion?" | askType | [ ] |
+| 5 | Tipo | `reparacion` | "Agendaremos reparacion. Para que fecha?" | askDate | [ ] |
+| 6 | Fecha | `el viernes` | "Para el [viernes]. A que hora?" | askTime | [ ] |
+| 7 | Hora | `a las 3` | Resumen parcial. "Duracion 1 hora. Esta bien?" | askDuration | [ ] |
+| 8 | Duracion | `si` | Resumen completo. "Correcto?" | confirmSummary | [ ] |
+| 9 | **CANCELAR** | `no` | "De acuerdo, empecemos de nuevo. Cotizacion, instalacion o reparacion?" | askType | [ ] |
+| 10 | Verificar | — | El flujo vuelve a askType, NO se creo cita | — | [ ] |
+
+**Resultado esperado:** Area code 954 funciona. Al decir "no" en confirmacion, vuelve al inicio del flujo de cita.
+
+---
+
+### GUION 11: Area code fuera de Florida (404 — Atlanta)
+
+**Cliente:** Russ Nordahl — Tel: `404-384-2663` — Compania 163
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion + Buscar | `404-384-2663` → Buscar | Tarjeta: Russ Nordahl, Compania 163 | [ ] |
+| 2 | Seleccionar idioma | Click **English** | "Hello Russ!" | [ ] |
+| 3 | Verificar | Revisar barra | step=greeting, customerId con valor | [ ] |
+
+**Resultado esperado:** Telefonos de fuera de Florida (area code 404) funcionan igual.
+
+---
+
+### GUION 12: Apellido dificil de pronunciar (test de voz)
+
+**Cliente:** BLAKE LICKTEIG — Tel: `305-522-1365` — Compania 163
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Nueva conversacion + Buscar | `305-522-1365` → Buscar | Tarjeta: BLAKE LICKTEIG, Compania 163 | [ ] |
+| 2 | Seleccionar idioma | Click **English** | "Hello Blake!" (o "Blake Lickteig") | [ ] |
+| 3 | Verificar por voz | Escuchar audio TTS | La IA pronuncia el nombre correctamente | [ ] |
+
+**Resultado esperado:** El TTS pronuncia el apellido de forma inteligible.
+
+---
+
+### GUION 13: Busqueda de cliente que aparece en 2 companias
+
+**Telefono:** `305-323-2397` (Mabel Mendoza en compania 163)
+
+| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
+|---|---|---|---|---|
+| 1 | Buscar | `305-323-2397` → Buscar | Muestra resultado. Verificar: totalResults y companias buscadas | [ ] |
+| 2 | Verificar | — | Si aparece en mas de 1 compania, la tarjeta muestra el primer resultado | [ ] |
+| 3 | Verificar auto-config | — | toNumber debe ser +15550000002 (compania 163) | [ ] |
+
+---
+
+### Resumen de cobertura
+
+| Guion | Nivel | Escenario | Cliente | Telefono |
+|---|---|---|---|---|
+| 1 | Nivel 1 | Match unico, espanol | Maria Elena Rodriguez | `305-545-2936` |
+| 2 | Nivel 1 | Match unico, ingles | Brian Williams | `786-853-4538` |
+| 3 | Nivel 2 | Telefono falso → buscar por nombre | Maria Elena Rodriguez | `999-999-9999` |
+| 4 | Nivel 2 | Nombre comun, desambiguacion | Jorge Lopez | `786-239-4584` |
+| 5 | Nivel 3 | 3 fallos → LLM → cliente nuevo | (nuevo) | `999-111-2222` |
+| 6 | Nivel 2 | Sin Caller ID | Mabel Mendoza | (vacio) |
+| 7 | Nivel 1 | Multi-tenant (compania 163) | Paulino Hernandez | `786-236-0929` |
+| 8 | Completo | Cita completa espanol | Diosdado Fernandez | `305-362-1270` |
+| 9 | Completo | Cita completa ingles | Althea Mcmillan | `305-904-2387` |
+| 10 | Completo | Cancelar y reiniciar cita | Sonia Iglesias | `954-438-4043` |
+| 11 | Nivel 1 | Area code fuera de FL | Russ Nordahl | `404-384-2663` |
+| 12 | Nivel 1 | Apellido dificil (TTS) | Blake Lickteig | `305-522-1365` |
+| 13 | Busqueda | Multi-compania lookup | Mabel Mendoza | `305-323-2397` |
+
+---
+
+*Ultima actualizacion: Febrero 2026 — Version 5.0 (Guiones de prueba con numeros reales + fix Speech API Edge)*
