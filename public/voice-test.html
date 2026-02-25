@@ -3,621 +3,848 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BlindsBook — Prueba de Voz IA Recepcionista</title>
+<title>BlindsBook — Simulador de Llamada IA</title>
 <style>
-  :root { --bg:#0f172a; --card:#1e293b; --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --yellow:#eab308; --text:#e2e8f0; --mute:#94a3b8; --border:#475569; }
+  :root { --bg:#0a0f1a; --card:#141c2e; --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --yellow:#eab308; --text:#e2e8f0; --mute:#94a3b8; --border:#2d3a50; --dark:#0d1220; }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:20px; }
-  h1 { font-size:1.5rem; margin-bottom:4px; }
-  .subtitle { color:var(--mute); font-size:.85rem; margin-bottom:20px; }
-  .panel { background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:840px; margin-bottom:16px; }
-  .panel h2 { font-size:1rem; margin-bottom:12px; color:var(--accent); }
-  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-  label { font-size:.85rem; color:var(--mute); min-width:90px; }
-  select, input[type=text] { background:#334155; border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:8px; font-size:.9rem; }
-  select { min-width:200px; }
-  input[type=text] { flex:1; min-width:200px; }
-  .btn { border:none; padding:10px 24px; border-radius:8px; font-size:.95rem; font-weight:600; cursor:pointer; transition:all .2s; display:inline-flex; align-items:center; gap:8px; }
+  body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:16px; }
+
+  .header { text-align:center; margin-bottom:16px; }
+  .header h1 { font-size:1.4rem; display:flex; align-items:center; justify-content:center; gap:10px; }
+  .header h1 .phone-icon { font-size:1.6rem; animation: ring 2s ease-in-out infinite; }
+  @keyframes ring { 0%,20%,50%,80%,100%{transform:rotate(0)} 10%{transform:rotate(12deg)} 30%{transform:rotate(-10deg)} 40%{transform:rotate(8deg)} }
+  .header .subtitle { color:var(--mute); font-size:.8rem; margin-top:4px; }
+
+  .panel { background:var(--card); border-radius:14px; padding:18px; width:100%; max-width:720px; margin-bottom:12px; border:1px solid var(--border); }
+  .panel h2 { font-size:.95rem; margin-bottom:10px; color:var(--accent); display:flex; align-items:center; gap:8px; }
+
+  .dialer-row { display:flex; gap:8px; }
+  .dialer-row input { flex:1; background:#1a2440; border:1px solid var(--border); color:var(--text); padding:12px 16px; border-radius:10px; font-size:1.1rem; letter-spacing:1px; font-weight:600; }
+  .dialer-row input::placeholder { color:#4a5568; font-weight:400; letter-spacing:0; }
+
+  .btn { border:none; padding:10px 22px; border-radius:10px; font-size:.9rem; font-weight:600; cursor:pointer; transition:all .15s; display:inline-flex; align-items:center; gap:8px; }
+  .btn-call { background:var(--green); color:#fff; padding:12px 28px; font-size:1rem; }
+  .btn-call:hover { background:#16a34a; transform:scale(1.02); }
+  .btn-call:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+  #dialerStatus { font-size:.8rem; color:var(--mute); margin-top:8px; min-height:18px; }
+  #dialerStatus.searching { color:var(--yellow); }
+  #dialerStatus.found { color:var(--green); }
+  #dialerStatus.notfound { color:var(--red); }
+  #dialerStatus.connecting { color:var(--accent); }
+
+  .customer-info { display:none; margin-top:10px; background:var(--dark); border:1px solid var(--border); border-radius:10px; padding:12px 16px; }
+  .customer-info.visible { display:block; animation: fadeIn .3s ease; }
+  .ci-header { display:flex; justify-content:space-between; align-items:center; }
+  .ci-name { font-size:1rem; color:var(--green); font-weight:600; }
+  .ci-badge { background:var(--accent); color:#fff; padding:2px 10px; border-radius:12px; font-size:.7rem; font-weight:600; }
+  .ci-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px 16px; margin-top:8px; }
+  .ci-grid .cf { font-size:.78rem; }
+  .ci-grid .cf .lbl { color:var(--mute); font-size:.65rem; text-transform:uppercase; letter-spacing:.5px; }
+  .ci-grid .cf .val { color:var(--text); font-weight:500; }
+  .ci-grid .cf .val.hl { color:var(--accent); }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+
+  .call-screen { display:none; }
+  .call-screen.active { display:block; }
+
+  .lang-selector { text-align:center; padding:20px 0; }
+  .lang-selector .lang-hint { color:var(--text); font-size:.95rem; margin-bottom:16px; font-weight:500; }
+  .lang-buttons { display:flex; gap:14px; justify-content:center; }
+  .btn-lang { padding:16px 36px; font-size:1rem; font-weight:700; border-radius:12px; border:2px solid var(--border); background:#1a2440; color:var(--text); cursor:pointer; transition:all .2s; min-width:180px; }
+  .btn-lang:hover { border-color:var(--accent); background:#1e3a5f; transform:translateY(-2px); }
+  .btn-lang:disabled { opacity:.3; cursor:not-allowed; transform:none; }
+  .btn-lang .flag { font-size:1.8rem; display:block; margin-bottom:6px; }
+
+  .status-bar { text-align:center; padding:10px; border-radius:10px; font-size:.85rem; font-weight:500; margin-bottom:6px; }
+  .status-bar.idle { background:#1a2440; color:var(--mute); }
+  .status-bar.listening { background:#14532d; color:#4ade80; border:1px solid #22c55e44; }
+  .status-bar.speaking { background:#1e3a5f; color:#60a5fa; border:1px solid #3b82f644; }
+  .status-bar.processing { background:#422006; color:#fbbf24; }
+  .status-bar.error { background:#450a0a; color:#fca5a5; }
+  .status-bar.ringing { background:#1e3a5f; color:#60a5fa; animation: pulse-ring 1.5s infinite; }
+  @keyframes pulse-ring { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+  .state-chips { display:flex; gap:6px; flex-wrap:wrap; font-size:.72rem; margin-top:4px; margin-bottom:8px; justify-content:center; }
+  .state-chips .chip { background:#1a2440; padding:3px 8px; border-radius:4px; border:1px solid var(--border); }
+  .state-chips .chip b { color:var(--accent); }
+
+  /* ─── Call Active Area ─── */
+  .call-active-area { display:none; text-align:center; padding:10px 0; }
+  .call-active-area.visible { display:block; }
+
+  .mic-indicator { display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:12px; padding:8px 16px; border-radius:10px; font-size:.85rem; font-weight:500; }
+  .mic-indicator.listening { background:#14532d55; color:#4ade80; border:1px solid #22c55e33; }
+  .mic-indicator.speaking { background:#1e3a5f55; color:#60a5fa; border:1px solid #3b82f633; }
+  .mic-indicator.processing { background:#42200655; color:#fbbf24; border:1px solid #eab30833; }
+  .mic-indicator.paused { background:#1a244055; color:var(--mute); border:1px solid var(--border); }
+
+  .sound-wave { display:inline-flex; align-items:center; gap:2px; height:18px; }
+  .sound-wave .bar { width:3px; background:currentColor; border-radius:2px; animation:wave 0.8s ease-in-out infinite; }
+  .sound-wave .bar:nth-child(1) { height:6px; animation-delay:0s; }
+  .sound-wave .bar:nth-child(2) { height:12px; animation-delay:0.1s; }
+  .sound-wave .bar:nth-child(3) { height:18px; animation-delay:0.2s; }
+  .sound-wave .bar:nth-child(4) { height:12px; animation-delay:0.3s; }
+  .sound-wave .bar:nth-child(5) { height:6px; animation-delay:0.4s; }
+  @keyframes wave { 0%,100%{transform:scaleY(0.4)} 50%{transform:scaleY(1)} }
+
+  .interim-text { font-size:.8rem; color:#4ade80; font-style:italic; min-height:22px; margin-bottom:10px; padding:0 20px; word-break:break-word; }
+
+  .btn-hangup-big { width:80px; height:80px; border-radius:50%; border:none; background:var(--red); color:#fff; font-size:2rem; cursor:pointer; transition:all .2s; display:inline-flex; align-items:center; justify-content:center; box-shadow:0 4px 20px #ef444444; }
+  .btn-hangup-big:hover { background:#dc2626; transform:scale(1.08); box-shadow:0 6px 30px #ef444466; }
+  .hangup-label { font-size:.78rem; color:var(--red); margin-top:8px; font-weight:500; }
+
+  /* ─── Text fallback ─── */
+  .text-fallback { margin-top:12px; display:none; }
+  .text-fallback.visible { display:block; }
+  .text-fallback-toggle { background:transparent; border:none; color:var(--mute); font-size:.72rem; cursor:pointer; text-decoration:underline; }
+  .text-fallback-toggle:hover { color:var(--text); }
+  .text-input-row { display:flex; gap:8px; margin-top:6px; }
+  .text-input-row input { flex:1; background:#1a2440; border:1px solid var(--border); color:var(--text); padding:10px 14px; border-radius:10px; font-size:.9rem; }
+  .btn-sm { padding:6px 14px; font-size:.78rem; border-radius:8px; }
   .btn-primary { background:var(--accent); color:#fff; }
   .btn-primary:hover { background:#2563eb; }
-  .btn-search { background:var(--green); color:#fff; padding:8px 18px; font-size:.9rem; }
-  .btn-search:hover { background:#16a34a; }
-  .btn-search:disabled { opacity:.5; cursor:not-allowed; }
-  .btn-record { background:var(--green); color:#fff; font-size:1.1rem; padding:14px 32px; }
-  .btn-record.recording { background:var(--red); animation:pulse 1s infinite; }
-  .btn-stop { background:var(--red); color:#fff; }
-  .btn-sm { padding:6px 14px; font-size:.8rem; }
-  .btn:disabled { opacity:.4; cursor:not-allowed; }
-  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
-  .controls { display:flex; gap:12px; justify-content:center; margin:16px 0; }
-  .transcript { max-height:420px; overflow-y:auto; padding:8px 0; }
-  .msg { margin-bottom:12px; padding:10px 14px; border-radius:10px; max-width:90%; line-height:1.5; font-size:.9rem; }
-  .msg.user { background:#334155; margin-left:auto; text-align:right; border-bottom-right-radius:2px; }
-  .msg.ia { background:#1a3a5c; border-bottom-left-radius:2px; }
-  .msg .meta { font-size:.7rem; color:var(--mute); margin-top:4px; }
-  .status { text-align:center; padding:8px; font-size:.85rem; border-radius:8px; }
-  .status.listening { background:#14532d; color:#4ade80; }
-  .status.speaking { background:#1e3a5f; color:#60a5fa; }
-  .status.idle { background:#334155; color:var(--mute); }
-  .status.error { background:#450a0a; color:#fca5a5; }
-  .state-bar { display:flex; gap:8px; flex-wrap:wrap; font-size:.75rem; margin-top:8px; }
-  .state-bar .chip { background:#334155; padding:3px 8px; border-radius:4px; }
-  .state-bar .chip b { color:var(--accent); }
-  .mode-toggle { display:flex; gap:0; border-radius:8px; overflow:hidden; border:1px solid var(--border); }
-  .mode-toggle button { background:#334155; color:var(--mute); border:none; padding:8px 16px; cursor:pointer; font-size:.85rem; }
-  .mode-toggle button.active { background:var(--accent); color:#fff; }
-  #textInput { display:none; }
-  #textInput.active { display:flex; }
-  .info { background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px; font-size:.8rem; color:var(--mute); line-height:1.6; }
-  .info b { color:var(--text); }
 
-  /* ─── Customer Lookup Panel ─── */
-  .lookup-input-row { display:flex; gap:8px; align-items:center; }
-  .lookup-input-row input { flex:1; font-size:1rem; padding:10px 14px; }
-  #lookupStatus { font-size:.8rem; color:var(--mute); margin-top:6px; min-height:20px; }
-  #lookupStatus.searching { color:var(--yellow); }
-  #lookupStatus.found { color:var(--green); }
-  #lookupStatus.notfound { color:var(--red); }
+  .transcript { max-height:380px; overflow-y:auto; padding:6px 0; min-height:60px; }
+  .transcript::-webkit-scrollbar { width:4px; }
+  .transcript::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+  .msg { margin-bottom:10px; padding:10px 14px; border-radius:12px; max-width:85%; line-height:1.5; font-size:.88rem; }
+  .msg.user { background:#1a2440; margin-left:auto; text-align:right; border-bottom-right-radius:3px; border:1px solid var(--border); }
+  .msg.ia { background:#0d2847; border-bottom-left-radius:3px; border:1px solid #1e3a5f; }
+  .msg.system { background:transparent; text-align:center; color:var(--mute); font-size:.78rem; border:1px dashed var(--border); max-width:100%; }
+  .msg .meta { font-size:.65rem; color:var(--mute); margin-top:4px; }
+  .msg .speaker { font-size:.7rem; font-weight:600; margin-bottom:3px; }
+  .msg.user .speaker { color:var(--green); }
+  .msg.ia .speaker { color:var(--accent); }
 
-  .customer-card { display:none; margin-top:14px; background:#0f172a; border:1px solid var(--border); border-radius:10px; padding:14px 18px; }
-  .customer-card.visible { display:block; }
-  .customer-card .card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-  .customer-card .card-header h3 { font-size:1.05rem; color:var(--green); margin:0; }
-  .customer-card .card-header .badge { background:var(--accent); color:#fff; padding:2px 10px; border-radius:12px; font-size:.75rem; font-weight:600; }
-  .customer-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 20px; }
-  .customer-grid .field { display:flex; flex-direction:column; padding:4px 0; }
-  .customer-grid .field .lbl { font-size:.7rem; color:var(--mute); text-transform:uppercase; letter-spacing:.5px; }
-  .customer-grid .field .val { font-size:.88rem; color:var(--text); font-weight:500; }
-  .customer-grid .field .val.highlight { color:var(--accent); }
-  .customer-grid .field .val.dim { color:var(--mute); font-style:italic; }
-  .config-auto { margin-top:10px; padding:8px 12px; background:#1a2744; border:1px solid #2d4a7a; border-radius:8px; font-size:.8rem; color:#93c5fd; }
-  .config-auto b { color:var(--accent); }
+  .controls-row { display:flex; justify-content:center; gap:10px; align-items:center; margin-top:6px; }
+  .btn-danger { background:var(--red); color:#fff; }
+  .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--mute); }
+  .btn-ghost:hover { border-color:var(--accent); color:var(--text); }
 
-  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
-  .customer-card.visible { animation: fadeIn .3s ease; }
+  .settings-toggle { text-align:center; }
+  .settings-toggle button { background:transparent; border:none; color:var(--mute); font-size:.78rem; cursor:pointer; padding:4px 12px; }
+  .settings-toggle button:hover { color:var(--text); }
+  .settings-body { display:none; }
+  .settings-body.open { display:block; margin-top:8px; }
+  .settings-body .row { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.82rem; }
+  .settings-body .row label { color:var(--mute); min-width:80px; }
+  .settings-body .row input, .settings-body .row select { flex:1; background:#1a2440; border:1px solid var(--border); color:var(--text); padding:6px 10px; border-radius:6px; font-size:.82rem; }
 
-  /* ─── Language Selection Panel ─── */
-  .lang-panel { text-align:center; }
-  .lang-panel p { color:var(--mute); font-size:.9rem; margin-bottom:12px; }
-  .lang-buttons { display:flex; gap:12px; justify-content:center; }
-  .btn-lang { padding:14px 32px; font-size:1rem; font-weight:700; border-radius:10px; border:2px solid var(--border); background:#334155; color:var(--text); cursor:pointer; transition:all .2s; min-width:200px; }
-  .btn-lang:hover { border-color:var(--accent); background:#1e3a5f; }
-  .btn-lang:disabled { opacity:.4; cursor:not-allowed; }
-  .btn-lang .flag { font-size:1.4rem; display:block; margin-bottom:4px; }
-  #langPanel.done { display:none; }
+  .call-timer { font-size:.75rem; color:var(--mute); text-align:center; font-variant-numeric:tabular-nums; margin-bottom:6px; }
+  .call-timer.active { color:var(--green); }
+
+  .live-fields { margin-top:8px; padding-top:8px; border-top:1px solid var(--border); }
+  .live-fields .cf .lbl { color:#22c55e !important; }
+
+  .finished-overlay { display:none; text-align:center; padding:24px; }
+  .finished-overlay.visible { display:block; animation:fadeIn .5s ease; }
+  .finished-overlay .check { font-size:3rem; }
+  .finished-overlay h3 { color:var(--green); margin:8px 0; }
+  .finished-overlay p { color:var(--mute); font-size:.85rem; line-height:1.6; }
 </style>
 </head>
 <body>
 
-<h1>🎙️ BlindsBook — IA Recepcionista</h1>
-<p class="subtitle">Prueba de voz en tiempo real — Busca un cliente por teléfono, luego habla o escribe</p>
+<!-- HEADER -->
+<div class="header">
+  <h1><span class="phone-icon">📞</span> BlindsBook — Simulador de Llamada</h1>
+  <p class="subtitle">Llamada real simulada — habla naturalmente, la IA escucha y responde en tiempo real</p>
+</div>
 
-<!-- CUSTOMER LOOKUP -->
-<div class="panel">
-  <h2>🔍 Búsqueda de Cliente por Teléfono</h2>
-  <div class="lookup-input-row">
-    <input type="text" id="customerPhone" placeholder="Ingresa el número de teléfono del cliente (ej: 305-123-4567)" 
-           onkeydown="if(event.key==='Enter')lookupCustomer()" />
-    <button class="btn btn-search" id="btnSearch" onclick="lookupCustomer()">🔍 Buscar</button>
+<!-- SETTINGS -->
+<div class="panel" style="padding:8px 18px;">
+  <div class="settings-toggle">
+    <button onclick="toggleSettings()">⚙️ Configuración avanzada ▾</button>
   </div>
-  <div id="lookupStatus"></div>
-
-  <div class="customer-card" id="customerCard">
-    <div class="card-header">
-      <h3 id="cardCustomerName">—</h3>
-      <span class="badge" id="cardCompanyBadge">—</span>
+  <div class="settings-body" id="settingsBody">
+    <div class="row">
+      <label>Servidor:</label>
+      <input type="text" id="serverUrl" value="http://localhost:4000" />
     </div>
-    <div class="customer-grid" id="customerGrid">
-      <!-- Populated dynamically -->
+    <div class="row">
+      <label>Compañía:</label>
+      <select id="companySelect">
+        <option value="">— Auto (del lookup) —</option>
+        <option value="+15550000001">Compañía 2 — All Blinds Inc</option>
+        <option value="+15550000002">Compañía 163 — Sophie Blinds LLC</option>
+        <option value="+15550000003">Compañía 387 — Miami's Best Blinds</option>
+      </select>
     </div>
-    <div class="config-auto" id="configAutoMsg" style="display:none">
-      ✅ Configuración aplicada automáticamente — <b>toNumber</b>: <span id="autoToNumber"></span> | <b>fromNumber (Caller ID)</b>: <span id="autoFromNumber"></span>
+    <div class="row">
+      <label>Caller ID:</label>
+      <input type="text" id="callerPhone" value="" placeholder="Se auto-configura al buscar cliente" />
     </div>
   </div>
 </div>
 
-<!-- CONFIG -->
-<div class="panel">
-  <h2>⚙️ Configuración</h2>
-  <div class="row">
-    <label>Compañía:</label>
-    <select id="companySelect">
-      <option value="">— Sin seleccionar (token por defecto) —</option>
-      <option value="+15550000001">Compañía 2 — All Blinds Inc</option>
-      <option value="+15550000002">Compañía 163 — ai_agent_callcenter</option>
-      <option value="+15550000003">Compañía 387 — karla1@blindsbook.com</option>
-    </select>
+<!-- PHONE DIALER -->
+<div class="panel" id="dialerPanel">
+  <h2>📱 Marcar número del cliente</h2>
+  <div class="dialer-row">
+    <input type="text" id="customerPhone" placeholder="Ej: 305-123-4567"
+           onkeydown="if(event.key==='Enter')startCall()" autocomplete="off" />
+    <button class="btn btn-call" id="btnCall" onclick="startCall()">📞 Llamar</button>
   </div>
-  <div class="row">
-    <label>Servidor:</label>
-    <input type="text" id="serverUrl" value="http://localhost:4000" />
-  </div>
-  <div class="row">
-    <label>Caller ID:</label>
-    <input type="text" id="callerPhone" value="+15551234567" placeholder="+1XXXXXXXXXX (simula From del cliente)" />
-  </div>
-  <div class="row">
-    <label>Modo:</label>
-    <div class="mode-toggle">
-      <button id="modeVoice" class="active" onclick="setMode('voice')">🎤 Voz</button>
-      <button id="modeText" onclick="setMode('text')">⌨️ Texto</button>
+  <div id="dialerStatus"></div>
+  <div class="customer-info" id="customerInfo">
+    <div class="ci-header">
+      <span class="ci-name" id="ciName">—</span>
+      <span class="ci-badge" id="ciBadge">—</span>
     </div>
-    <button class="btn btn-sm btn-primary" onclick="resetConversationFull()">🔄 Nueva conversación</button>
+    <div class="ci-grid" id="ciGrid"></div>
+    <div class="live-fields" id="liveFields" style="display:none">
+      <div class="ci-grid" id="liveGrid"></div>
+    </div>
   </div>
 </div>
 
-<!-- LANGUAGE SELECTION -->
-<div class="panel lang-panel" id="langPanel">
-  <h2>🌐 Paso 1 — Selecciona el Idioma</h2>
-  <p>Esto inicia la conversación y envía la selección de idioma a la IA</p>
-  <div class="lang-buttons">
-    <button class="btn-lang" id="btnLangEs" onclick="startWithLanguage('1')">
-      <span class="flag">🇪🇸</span> Español — Presione 1
-    </button>
-    <button class="btn-lang" id="btnLangEn" onclick="startWithLanguage('2')">
-      <span class="flag">🇺🇸</span> English — Press 2
-    </button>
+<!-- CALL SCREEN -->
+<div class="panel call-screen" id="callScreen">
+  <div class="call-timer" id="callTimer">00:00</div>
+  <div class="status-bar idle" id="statusBar">Conectando...</div>
+  <div class="state-chips" id="stateChips"></div>
+
+  <!-- Language Selector -->
+  <div class="lang-selector" id="langSelector">
+    <div class="lang-hint" id="langHint">Esperando saludo del sistema...</div>
+    <div class="lang-buttons">
+      <button class="btn-lang" id="btnLang1" onclick="selectLanguage('1')" disabled>
+        <span class="flag">🇪🇸</span> Presione 1<br>Español
+      </button>
+      <button class="btn-lang" id="btnLang2" onclick="selectLanguage('2')" disabled>
+        <span class="flag">🇺🇸</span> Press 2<br>English
+      </button>
+    </div>
   </div>
-</div>
 
-<!-- STATUS -->
-<div class="panel">
-  <div id="status" class="status idle">Listo — Busca un cliente arriba, luego selecciona el idioma</div>
-  <div class="state-bar" id="stateBar"></div>
-</div>
+  <!-- Active Call Area (mic auto-on, hang up button) -->
+  <div class="call-active-area" id="callActiveArea">
+    <!-- Mic indicator -->
+    <div class="mic-indicator listening" id="micIndicator">
+      <div class="sound-wave" id="soundWave">
+        <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+      </div>
+      <span id="micIndicatorText">🎤 Escuchando...</span>
+    </div>
 
-<!-- CONTROLS -->
-<div class="panel">
-  <div class="controls" id="voiceControls">
-    <button class="btn btn-record" id="btnRecord" onclick="toggleRecording()">
-      🎤 Mantén presionado para hablar
-    </button>
+    <!-- Live interim text -->
+    <div class="interim-text" id="interimText"></div>
+
+    <!-- Big hang-up button -->
+    <button class="btn-hangup-big" id="btnHangup" onclick="hangUp()">📵</button>
+    <div class="hangup-label">Colgar</div>
+
+    <!-- Text fallback (hidden, for when voice fails) -->
+    <div class="text-fallback" id="textFallback">
+      <button class="text-fallback-toggle" onclick="toggleTextFallback()">⌨️ Usar modo texto</button>
+      <div id="textFallbackBody" style="display:none">
+        <div class="text-input-row">
+          <input type="text" id="txtMsg" placeholder="Escribe tu mensaje..." onkeydown="if(event.key==='Enter')sendTextMsg()" />
+          <button class="btn btn-sm btn-primary" onclick="sendTextMsg()">Enviar</button>
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="row" id="textInput">
-    <input type="text" id="txtMsg" placeholder="Escribe tu mensaje..." onkeydown="if(event.key==='Enter')sendText()" />
-    <button class="btn btn-primary btn-sm" onclick="sendText()">Enviar</button>
+
+  <!-- Finished overlay -->
+  <div class="finished-overlay" id="finishedOverlay">
+    <div class="check">✅</div>
+    <h3 id="finishedTitle">Cita agendada exitosamente</h3>
+    <p id="finishedSummary">La conversación ha finalizado.</p>
   </div>
-</div>
 
-<!-- TRANSCRIPT -->
-<div class="panel">
-  <h2>💬 Conversación</h2>
-  <div class="transcript" id="transcript"></div>
-</div>
+  <!-- Transcript -->
+  <div style="margin-top:14px;">
+    <h2 style="font-size:.85rem;color:var(--accent);margin-bottom:6px;">💬 Transcripción de la llamada</h2>
+    <div class="transcript" id="transcript"></div>
+  </div>
 
-<!-- INFO -->
-<div class="panel info">
-  <b>¿Cómo funciona?</b><br>
-  1. Ingresa el <b>teléfono del cliente</b> y presiona <b>Buscar</b> — se consultan las compañías configuradas en el sistema.<br>
-  2. Si se encuentra, verás los datos del cliente y la configuración se aplica automáticamente (<b>toNumber</b> y <b>Caller ID</b>).<br>
-  3. Presiona <b>🎤</b> y habla (o usa el modo Texto) — la IA identifica al cliente y gestiona la cita.<br>
-  4. El audio se reproduce automáticamente — escucharás la respuesta de la recepcionista.<br>
-  5. Repite hasta completar la cita.<br><br>
-  <b>Compañías configuradas:</b> 2 (All Blinds Inc), 163 (ai_agent_callcenter), 387 (karla1).<br>
-  <b>Requisitos:</b> Chrome o Edge (Web Speech API). Micrófono activo. Servicios en puertos 4000 + 8000.
+  <!-- Bottom controls -->
+  <div class="controls-row" style="margin-top:12px;">
+    <button class="btn btn-sm btn-ghost" onclick="newCall()">🔄 Nueva llamada</button>
+  </div>
 </div>
 
 <script>
-const API = () => document.getElementById('serverUrl').value.replace(/\/$/,'');
-let callId = 'voice-' + Date.now();
-let mode = 'voice';
-let recognition = null;
-let isRecording = false;
-let isPlaying = false;
-let currentAudio = null;
-let lastLookupResult = null; // last successful customer lookup
-let speechRetryCount = 0;
-const MAX_SPEECH_RETRIES = 2;
+// ═══════════════════════════════════════════════════════════════
+// BlindsBook — Simulador de Llamada en Tiempo Real
+// ═══════════════════════════════════════════════════════════════
+//
+// FLUJO:
+// 1. Ingresa teléfono → "Llamar" → busca cliente → conecta con IA
+// 2. IA saluda + pide idioma → botones 1 (ES) / 2 (EN)
+// 3. Al seleccionar idioma → MIC SE ABRE AUTOMÁTICAMENTE
+// 4. Hablas → silencio detectado (1.8s) → envía al servidor automáticamente
+// 5. IA responde con audio → mic se pausa → audio se reproduce
+// 6. Audio termina → mic se reabre automáticamente
+// 7. Repite 4-6 hasta terminar la cita
+// 8. Botón grande rojo = COLGAR (termina la llamada y la escucha)
+//
+// ═══════════════════════════════════════════════════════════════
 
-// ─── Customer Lookup ───
-async function lookupCustomer() {
-  const phoneInput = document.getElementById('customerPhone');
-  const phone = phoneInput.value.trim();
+var API = function() { return document.getElementById('serverUrl').value.replace(/\/$/,''); };
+
+// ─── State ───
+var callId = null;
+var callActive = false;
+var callStartTime = null;
+var callTimerInterval = null;
+var chosenLanguage = null;
+var recognition = null;
+var micActive = false;        // true = mic listening (part of the call)
+var isProcessing = false;     // waiting for server response
+var isPlaying = false;        // IA audio playing
+var currentAudio = null;
+var lastLookupResult = null;
+var conversationFinished = false;
+
+// Speech accumulation
+var accumulatedFinal = '';    // final recognized segments
+var interimBuffer = '';       // current interim text
+var silenceTimer = null;      // fires after silence to auto-send
+var SILENCE_DELAY = 1800;    // ms of silence before auto-sending
+var hasSpeechThisTurn = false;
+
+var speechRetryCount = 0;
+var MAX_SPEECH_RETRIES = 3;
+
+var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+// ═══ SETTINGS ═══
+function toggleSettings() {
+  document.getElementById('settingsBody').classList.toggle('open');
+}
+
+// ═══ START CALL ═══
+async function startCall() {
+  var phone = document.getElementById('customerPhone').value.trim();
   if (!phone || phone.length < 3) {
-    setLookupStatus('notfound', '⚠️ Ingresa al menos 3 caracteres del teléfono');
+    setDialerStatus('notfound', '⚠️ Ingresa al menos 3 caracteres del teléfono');
     return;
   }
 
-  const btn = document.getElementById('btnSearch');
+  var btn = document.getElementById('btnCall');
   btn.disabled = true;
   btn.textContent = '⏳ Buscando...';
-  setLookupStatus('searching', `🔍 Buscando "${phone}" en compañías configuradas...`);
-  hideCustomerCard();
+  setDialerStatus('searching', '🔍 Buscando "' + phone + '" en el sistema...');
 
   try {
-    const resp = await fetch(API() + '/debug/customer-lookup?phone=' + encodeURIComponent(phone));
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    var resp = await fetch(API() + '/debug/customer-lookup?phone=' + encodeURIComponent(phone));
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
 
-    if (data.results && data.results.length > 0) {
-      const customer = data.results[0]; // pick first match
-      lastLookupResult = customer;
-      showCustomerCard(customer, data.results.length, data.companiesSearched);
-
-      // Auto-configure: set toNumber and callerPhone
-      document.getElementById('companySelect').value = customer.twilioNumber;
-      document.getElementById('callerPhone').value = customer.phone || phone;
-
-      setLookupStatus('found', `✅ Encontrado: ${data.results.length} resultado(s) en ${data.companiesSearched.length} compañía(s)`);
-    } else {
-      setLookupStatus('notfound', `❌ No encontrado en compañías configuradas (${data.companiesSearched.join(', ')}). Verifica el número o configura más compañías.`);
+    if (!data.results || data.results.length === 0) {
+      setDialerStatus('notfound', '❌ No encontrado. Compañías: ' + data.companiesSearched.join(', '));
+      btn.disabled = false;
+      btn.textContent = '📞 Llamar';
+      return;
     }
-  } catch (err) {
-    setLookupStatus('notfound', '❌ Error: ' + err.message + ' — ¿El servidor está corriendo?');
-  } finally {
+
+    var customer = data.results[0];
+    lastLookupResult = customer;
+    document.getElementById('companySelect').value = customer.twilioNumber;
+    document.getElementById('callerPhone').value = customer.phone || phone;
+    showCustomerInfo(customer);
+    setDialerStatus('found', '✅ ' + (customer.firstName || '') + ' ' + (customer.lastName || '') + ' — Compañía ' + customer.companyId);
+
+    btn.textContent = '📞 Conectando...';
+    setDialerStatus('connecting', '📡 Conectando con la recepcionista IA...');
+    await startCallSession();
+  } catch(err) {
+    setDialerStatus('notfound', '❌ Error: ' + err.message);
     btn.disabled = false;
-    btn.textContent = '🔍 Buscar';
+    btn.textContent = '📞 Llamar';
   }
 }
 
-function setLookupStatus(cls, text) {
-  const el = document.getElementById('lookupStatus');
+function showCustomerInfo(customer) {
+  var name = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
+  document.getElementById('ciName').textContent = '👤 ' + name;
+  document.getElementById('ciBadge').textContent = (customer.companyName || 'Compañía') + ' (ID: ' + customer.companyId + ')';
+  var grid = document.getElementById('ciGrid');
+  grid.innerHTML = '';
+  var fields = [
+    { label:'ID', value:customer.id, hl:true },
+    { label:'Teléfono', value:customer.phone||'—', hl:true },
+    { label:'Account Mgr', value:customer.accountManagerId||'N/A' },
+  ];
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    grid.innerHTML += '<div class="cf"><div class="lbl">'+f.label+'</div><div class="val'+(f.hl?' hl':'')+'">'+f.value+'</div></div>';
+  }
+  document.getElementById('customerInfo').className = 'customer-info visible';
+}
+
+function setDialerStatus(cls, text) {
+  var el = document.getElementById('dialerStatus');
   el.className = cls;
   el.textContent = text;
 }
 
-function showCustomerCard(customer, totalResults, companiesSearched) {
-  const card = document.getElementById('customerCard');
-  const fullName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
-  
-  document.getElementById('cardCustomerName').textContent = '👤 ' + fullName;
-  document.getElementById('cardCompanyBadge').textContent = 'Compañía ' + customer.companyId;
+// ═══ CALL SESSION ═══
+async function startCallSession() {
+  callId = 'call-' + Date.now();
+  callActive = true;
+  conversationFinished = false;
+  chosenLanguage = null;
+  accumulatedFinal = '';
+  interimBuffer = '';
 
-  const grid = document.getElementById('customerGrid');
-  grid.innerHTML = '';
-
-  const fields = [
-    { label: 'ID Cliente', value: customer.id, highlight: true },
-    { label: 'Compañía', value: customer.companyName || 'N/A' },
-    { label: 'Nombre', value: customer.firstName || '—' },
-    { label: 'Apellido', value: customer.lastName || '—' },
-    { label: 'Teléfono', value: customer.phone || '—', highlight: true },
-    { label: 'Account Manager ID', value: customer.accountManagerId || 'Sin asignar' },
-    { label: 'Company ID (BD)', value: customer.companyId },
-    { label: 'Twilio Number', value: customer.twilioNumber },
-  ];
-
-  for (const f of fields) {
-    const div = document.createElement('div');
-    div.className = 'field';
-    div.innerHTML = `<span class="lbl">${f.label}</span><span class="val${f.highlight ? ' highlight' : ''}">${f.value}</span>`;
-    grid.appendChild(div);
-  }
-
-  // Show auto-config message
-  const configMsg = document.getElementById('configAutoMsg');
-  configMsg.style.display = 'block';
-  document.getElementById('autoToNumber').textContent = customer.twilioNumber + ' → Compañía ' + customer.companyId;
-  document.getElementById('autoFromNumber').textContent = customer.phone || document.getElementById('callerPhone').value;
-
-  card.className = 'customer-card visible';
-}
-
-function hideCustomerCard() {
-  document.getElementById('customerCard').className = 'customer-card';
-  document.getElementById('configAutoMsg').style.display = 'none';
-}
-
-// ─── Web Speech API (STT del navegador — gratis) ───
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (!SpeechRecognition) {
-  document.getElementById('status').textContent = '⚠️ Tu navegador no soporta Web Speech API. Usa Chrome o Edge.';
-  document.getElementById('status').className = 'status error';
-  document.getElementById('btnRecord').disabled = true;
-}
-
-function setMode(m) {
-  mode = m;
-  document.getElementById('modeVoice').className = m==='voice'?'active':'';
-  document.getElementById('modeText').className = m==='text'?'active':'';
-  document.getElementById('voiceControls').style.display = m==='voice'?'flex':'none';
-  document.getElementById('textInput').className = m==='text'?'row active':'row';
-  if (m==='text') document.getElementById('txtMsg').focus();
-}
-
-function resetConversation() {
-  callId = 'voice-' + Date.now();
+  document.getElementById('callScreen').className = 'panel call-screen active';
+  document.getElementById('btnCall').style.display = 'none';
   document.getElementById('transcript').innerHTML = '';
-  updateState(null);
-  setStatus('idle', 'Nueva conversación iniciada');
-  // Trigger initial greeting
-  sendToServer(null);
-}
+  document.getElementById('langSelector').style.display = 'block';
+  document.getElementById('callActiveArea').className = 'call-active-area';
+  document.getElementById('finishedOverlay').className = 'finished-overlay';
+  document.getElementById('langHint').textContent = 'Conectando...';
+  document.getElementById('btnLang1').disabled = true;
+  document.getElementById('btnLang2').disabled = true;
+  document.getElementById('liveFields').style.display = 'none';
+  document.getElementById('textFallbackBody').style.display = 'none';
 
-function getToNumber() {
-  return document.getElementById('companySelect').value || null;
-}
+  callStartTime = Date.now();
+  clearInterval(callTimerInterval);
+  callTimerInterval = setInterval(updateCallTimer, 1000);
+  document.getElementById('callTimer').className = 'call-timer active';
 
-// ─── Recording ───
-function toggleRecording() {
-  if (isPlaying) return;
-  if (isRecording) {
-    stopRecording();
-  } else {
-    startRecording();
+  setStatusBar('ringing', '📡 Conectando con BlindsBook IA...');
+  addMessage('system', '📞 Llamada iniciada...');
+
+  await sleep(1000);
+
+  try {
+    var result = await sendToServer(null);
+    if (result) {
+      document.getElementById('langHint').textContent = '';
+      document.getElementById('btnLang1').disabled = false;
+      document.getElementById('btnLang2').disabled = false;
+      setStatusBar('idle', 'Selecciona el idioma presionando 1 o 2');
+    }
+  } catch(err) {
+    setStatusBar('error', '❌ Error: ' + err.message);
   }
 }
 
-function startRecording() {
-  if (!SpeechRecognition) return;
-  
+// ═══ LANGUAGE SELECTION ═══
+async function selectLanguage(choice) {
+  document.getElementById('btnLang1').disabled = true;
+  document.getElementById('btnLang2').disabled = true;
+  setStatusBar('processing', '⏳ Enviando selección...');
+
+  chosenLanguage = choice === '1' ? 'es' : 'en';
+  addMessage('user', choice === '1' ? 'Español (1)' : 'English (2)');
+
+  var result = await sendToServer(choice);
+
+  // Hide language, show active call area
+  document.getElementById('langSelector').style.display = 'none';
+  document.getElementById('callActiveArea').className = 'call-active-area visible';
+  document.getElementById('textFallback').className = 'text-fallback visible';
+
+  // After IA finishes speaking, mic opens automatically (handled in sendToServer)
+}
+
+// ═══ REAL-TIME MICROPHONE (auto-listen, auto-send on silence) ═══
+function startListening() {
+  if (!SpeechRecognition || !callActive || conversationFinished || isProcessing || isPlaying) return;
+
+  micActive = true;
+  accumulatedFinal = '';
+  interimBuffer = '';
+  hasSpeechThisTurn = false;
+  clearTimeout(silenceTimer);
+  setMicIndicator('listening');
+  document.getElementById('interimText').textContent = '';
+
   recognition = new SpeechRecognition();
-  recognition.lang = 'es-ES';
-  recognition.interimResults = false;
+  recognition.lang = chosenLanguage === 'en' ? 'en-US' : 'es-ES';
+  recognition.interimResults = true;
+  recognition.continuous = true;
   recognition.maxAlternatives = 1;
-  recognition.continuous = false;
-  
-  recognition.onresult = (event) => {
-    const text = event.results[0][0].transcript;
-    const confidence = event.results[0][0].confidence;
-    addMessage('user', text, `Confianza: ${(confidence*100).toFixed(0)}%`);
-    sendToServer(text);
+
+  recognition.onresult = function(event) {
+    if (!micActive) return;
+
+    var finalText = '';
+    var interimText = '';
+    for (var i = 0; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalText += event.results[i][0].transcript + ' ';
+      } else {
+        interimText += event.results[i][0].transcript;
+      }
+    }
+
+    accumulatedFinal = finalText.trim();
+    interimBuffer = interimText.trim();
+    var display = (accumulatedFinal + ' ' + interimBuffer).trim();
+
+    if (display) {
+      hasSpeechThisTurn = true;
+      document.getElementById('interimText').textContent = '💬 "' + display + '"';
+      setMicIndicator('listening');
+
+      // Reset silence timer — will fire after SILENCE_DELAY ms of no new results
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(function() {
+        onSilenceDetected();
+      }, SILENCE_DELAY);
+    }
   };
-  
-  recognition.onerror = (event) => {
+
+  recognition.onerror = function(event) {
     console.warn('Speech error:', event.error);
     if (event.error === 'no-speech') {
-      setStatus('idle', 'No se detectó voz — intenta de nuevo');
+      // Just keep listening silently
+      if (micActive) {
+        setMicIndicator('listening');
+      }
     } else if (event.error === 'not-allowed') {
-      setStatus('error', '⚠️ Permiso de micrófono denegado. Permite el acceso en tu navegador.');
+      micActive = false;
+      setMicIndicator('paused');
+      setStatusBar('error', '⚠️ Permiso de micrófono denegado. Permite el acceso y recarga.');
     } else if (event.error === 'network') {
-      // Edge uses cloud speech services — retry automatically
-      if (speechRetryCount < MAX_SPEECH_RETRIES) {
+      if (speechRetryCount < MAX_SPEECH_RETRIES && micActive) {
         speechRetryCount++;
-        setStatus('listening', `🔄 Reconectando al servicio de voz (intento ${speechRetryCount}/${MAX_SPEECH_RETRIES})...`);
-        isRecording = false;
-        setTimeout(() => startRecording(), 800);
+        setTimeout(function() { if (micActive && callActive) startListening(); }, 800);
         return;
       }
-      speechRetryCount = 0;
-      setStatus('error', '⚠️ Error de red en reconocimiento de voz. Edge requiere conexión a Internet para STT. Cambiando a modo Texto...');
-      // Auto-switch to text mode after network failure
-      setTimeout(() => setMode('text'), 1500);
-    } else if (event.error === 'audio-capture') {
-      setStatus('error', '⚠️ No se detectó micrófono. Verifica que esté conectado y permitido.');
+      micActive = false;
+      setMicIndicator('paused');
+      setStatusBar('error', '⚠️ Error de red en reconocimiento. Usa el modo texto.');
     } else if (event.error === 'aborted') {
-      setStatus('idle', 'Reconocimiento cancelado');
-    } else {
-      setStatus('error', `Error de reconocimiento: ${event.error}. Prueba con modo Texto.`);
+      // Normal stop
     }
-    isRecording = false;
-    updateRecordButton();
   };
-  
-  recognition.onend = () => {
-    isRecording = false;
-    updateRecordButton();
+
+  recognition.onend = function() {
+    // Browser auto-stops recognition — restart if call still active
+    if (micActive && callActive && !conversationFinished && !isProcessing && !isPlaying) {
+      setTimeout(function() {
+        if (micActive && callActive) startListening();
+      }, 150);
+    }
   };
-  
+
   try {
     recognition.start();
-    isRecording = true;
     speechRetryCount = 0;
-    updateRecordButton();
-    setStatus('listening', '🎤 Escuchando... Habla ahora');
   } catch(e) {
-    if (e.message && e.message.includes('already started')) {
-      // Edge sometimes throws if recognition is already running
-      return;
+    if (e.message && e.message.indexOf('already started') === -1) {
+      console.warn('Mic start error:', e);
+      setStatusBar('error', 'Error micrófono: ' + e.message);
     }
-    setStatus('error', 'No se pudo iniciar el micrófono: ' + e.message);
   }
 }
 
-function stopRecording() {
+function stopListening() {
+  micActive = false;
+  clearTimeout(silenceTimer);
   if (recognition) {
-    recognition.stop();
+    try { recognition.stop(); } catch(e) {}
+    recognition = null;
   }
-  isRecording = false;
-  updateRecordButton();
+  document.getElementById('interimText').textContent = '';
 }
 
-function updateRecordButton() {
-  const btn = document.getElementById('btnRecord');
-  if (isRecording) {
-    btn.className = 'btn btn-record recording';
-    btn.innerHTML = '🔴 Escuchando... (click para detener)';
-  } else if (isPlaying) {
-    btn.className = 'btn btn-record';
-    btn.innerHTML = '🔊 IA hablando...';
-    btn.disabled = true;
-  } else {
-    btn.className = 'btn btn-record';
-    btn.innerHTML = '🎤 Presiona para hablar';
-    btn.disabled = false;
-  }
-}
+function onSilenceDetected() {
+  if (!micActive || isProcessing || isPlaying) return;
 
-// ─── Text mode ───
-function sendText() {
-  const input = document.getElementById('txtMsg');
-  const text = input.value.trim();
+  var text = (accumulatedFinal + ' ' + interimBuffer).trim();
   if (!text) return;
-  input.value = '';
+
+  // Stop listening, send, then resume after response
+  stopListening();
+  setMicIndicator('processing');
+  document.getElementById('interimText').textContent = '';
+
   addMessage('user', text);
   sendToServer(text);
 }
 
-// ─── Server communication ───
+function setMicIndicator(state) {
+  var el = document.getElementById('micIndicator');
+  var textEl = document.getElementById('micIndicatorText');
+  var waveEl = document.getElementById('soundWave');
+  var es = chosenLanguage === 'es';
+
+  el.className = 'mic-indicator ' + state;
+
+  if (state === 'listening') {
+    waveEl.style.display = 'inline-flex';
+    textEl.textContent = es ? '🎤 Escuchando...' : '🎤 Listening...';
+    setStatusBar('listening', es ? '🎤 En llamada — habla naturalmente' : '🎤 On call — speak naturally');
+  } else if (state === 'speaking') {
+    waveEl.style.display = 'inline-flex';
+    textEl.textContent = es ? '🔊 Recepcionista hablando...' : '🔊 Receptionist speaking...';
+    setStatusBar('speaking', es ? '🔊 Recepcionista hablando...' : '🔊 Receptionist speaking...');
+  } else if (state === 'processing') {
+    waveEl.style.display = 'none';
+    textEl.textContent = es ? '⏳ Procesando...' : '⏳ Processing...';
+    setStatusBar('processing', es ? '⏳ Procesando tu mensaje...' : '⏳ Processing your message...');
+  } else if (state === 'paused') {
+    waveEl.style.display = 'none';
+    textEl.textContent = es ? '⏸ Micrófono pausado' : '⏸ Mic paused';
+  }
+}
+
+// ═══ TEXT FALLBACK ═══
+function toggleTextFallback() {
+  var body = document.getElementById('textFallbackBody');
+  body.style.display = body.style.display === 'none' ? 'block' : 'none';
+  if (body.style.display === 'block') {
+    document.getElementById('txtMsg').focus();
+  }
+}
+
+function sendTextMsg() {
+  var input = document.getElementById('txtMsg');
+  var text = input.value.trim();
+  if (!text || conversationFinished || isProcessing) return;
+  input.value = '';
+
+  // Pause mic while sending
+  stopListening();
+  addMessage('user', text);
+  sendToServer(text);
+}
+
+// ═══ SERVER COMMUNICATION ═══
 async function sendToServer(text) {
-  setStatus('speaking', '⏳ Procesando...');
-  
-  const body = { callId, text, toNumber: getToNumber(), fromNumber: document.getElementById('callerPhone').value || null };
-  
+  isProcessing = true;
+  if (text !== null) setMicIndicator('processing');
+
+  var body = {
+    callId: callId,
+    text: text,
+    toNumber: document.getElementById('companySelect').value || null,
+    fromNumber: document.getElementById('callerPhone').value || null,
+  };
+
   try {
-    const resp = await fetch(API() + '/debug/voice-chat', {
+    var resp = await fetch(API() + '/debug/voice-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    
-    const data = await resp.json();
-    
-    const meta = `Step: ${data.state.step} | TTS: ${data.ttsProvider}`;
-    addMessage('ia', data.replyText, meta);
-    updateState(data.state);
-    
-    // Update customer card with real-time state info if we have a customer match
-    if (data.state.customerId && lastLookupResult) {
-      updateRealTimeState(data.state);
-    }
-    
+
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
+
+    var stepLabel = data.state ? data.state.step : '?';
+    addMessage('ia', data.replyText, 'Step: ' + stepLabel + ' | TTS: ' + data.ttsProvider);
+    updateStateChips(data.state);
+    updateLiveFields(data.state);
+
     // Play audio
     if (data.audioBase64) {
+      isPlaying = true;
+      setMicIndicator('speaking');
       await playAudioBase64(data.audioBase64);
-    } else {
-      setStatus('idle', 'Sin audio TTS — respuesta solo texto');
+      isPlaying = false;
     }
-    
+
+    isProcessing = false;
+
+    // Check finished
     if (data.isFinished) {
-      addMessage('ia', '✅ Conversación finalizada. Presiona "Nueva conversación" para empezar otra.', 'Sistema');
-      setStatus('idle', '✅ Cita gestionada — conversación terminada');
+      conversationFinished = true;
+      stopListening();
+      var summary = buildFinishedSummary(data.state);
+      document.getElementById('finishedSummary').innerHTML = summary;
+      document.getElementById('finishedOverlay').className = 'finished-overlay visible';
+      document.getElementById('callActiveArea').className = 'call-active-area';
+      setStatusBar('idle', '✅ Cita agendada — llamada finalizada');
+      addMessage('system', '✅ Cita agendada exitosamente.');
+      stopCallTimer();
+      return data;
     }
-    
+
+    // Auto-resume listening after IA speaks (if call active and language chosen)
+    if (callActive && chosenLanguage && !conversationFinished) {
+      startListening();
+    }
+
+    return data;
   } catch(err) {
-    setStatus('error', '❌ Error: ' + err.message);
-    addMessage('ia', '⚠️ Error al contactar el servidor: ' + err.message, 'Error');
-  }
-}
-
-function updateRealTimeState(state) {
-  // Add live state fields to the customer card
-  const grid = document.getElementById('customerGrid');
-  // Remove previous live fields
-  grid.querySelectorAll('.live-field').forEach(el => el.remove());
-
-  const liveFields = [
-    state.customerId ? { label: '✓ IDENTIFICADO (ID)', value: state.customerId } : null,
-    state.customerConfirmedName ? { label: '✓ NOMBRE CONFIRMADO', value: state.customerConfirmedName } : null,
-    state.type !== null ? { label: 'TIPO CITA', value: ['Cotización','Instalación','Reparación'][state.type] } : null,
-    state.startDateISO ? { label: 'FECHA CITA', value: new Date(state.startDateISO).toLocaleString('es-ES') } : null,
-    state.duration ? { label: 'DURACIÓN', value: state.duration } : null,
-  ].filter(Boolean);
-
-  for (const f of liveFields) {
-    const div = document.createElement('div');
-    div.className = 'field live-field';
-    div.innerHTML = `<span class="lbl" style="color:#22c55e">${f.label}</span><span class="val highlight">${f.value}</span>`;
-    grid.appendChild(div);
-  }
-}
-
-// ─── Audio playback ───
-function playAudioBase64(b64) {
-  return new Promise((resolve) => {
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio = null;
+    isProcessing = false;
+    setStatusBar('error', '❌ Error: ' + err.message);
+    addMessage('system', '⚠️ Error: ' + err.message);
+    // Try to resume listening after error
+    if (callActive && chosenLanguage && !conversationFinished) {
+      setTimeout(function() { startListening(); }, 2000);
     }
-    
-    const audioSrc = 'data:audio/mpeg;base64,' + b64;
-    const audio = new Audio(audioSrc);
+    return null;
+  }
+}
+
+function buildFinishedSummary(state) {
+  if (!state) return '';
+  var parts = [];
+  if (state.customerConfirmedName) parts.push('<b>Cliente:</b> ' + state.customerConfirmedName);
+  if (state.customerId) parts.push('<b>ID:</b> ' + state.customerId);
+  if (state.type !== null && state.type !== undefined) {
+    var types = ['Cotización/Quote', 'Instalación/Installation', 'Reparación/Repair'];
+    parts.push('<b>Tipo:</b> ' + (types[state.type] || state.type));
+  }
+  if (state.startDateISO) parts.push('<b>Fecha:</b> ' + new Date(state.startDateISO).toLocaleString());
+  if (state.duration) parts.push('<b>Duración:</b> ' + state.duration);
+  return parts.join('<br>');
+}
+
+// ═══ AUDIO ═══
+function playAudioBase64(b64) {
+  return new Promise(function(resolve) {
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+    var audio = new Audio('data:audio/mpeg;base64,' + b64);
     currentAudio = audio;
-    isPlaying = true;
-    updateRecordButton();
-    setStatus('speaking', '🔊 IA hablando...');
-    
-    audio.onended = () => {
-      isPlaying = false;
-      currentAudio = null;
-      updateRecordButton();
-      setStatus('idle', 'Tu turno — presiona 🎤 para hablar');
-      resolve();
-    };
-    
-    audio.onerror = (e) => {
-      console.warn('Audio playback error:', e);
-      isPlaying = false;
-      currentAudio = null;
-      updateRecordButton();
-      setStatus('idle', 'Audio no reproducido — tu turno');
-      resolve();
-    };
-    
-    audio.play().catch(err => {
+    audio.onended = function() { currentAudio = null; resolve(); };
+    audio.onerror = function() { currentAudio = null; resolve(); };
+    audio.play().catch(function(err) {
       console.warn('Autoplay blocked:', err);
-      isPlaying = false;
-      updateRecordButton();
-      setStatus('idle', '⚠️ Click en la página primero (autoplay bloqueado) — tu turno');
+      addMessage('system', '⚠️ Click en la página para permitir audio y vuelve a hablar.');
+      currentAudio = null;
       resolve();
     });
   });
 }
 
-// ─── UI helpers ───
+// ═══ STATE DISPLAY ═══
+function updateStateChips(state) {
+  var bar = document.getElementById('stateChips');
+  if (!state) { bar.innerHTML = ''; return; }
+  var chips = [
+    '<span class="chip"><b>Step:</b> ' + state.step + '</span>',
+    '<span class="chip"><b>Lang:</b> ' + (state.language || '?') + '</span>',
+  ];
+  if (state.callerPhone) chips.push('<span class="chip"><b>From:</b> ' + state.callerPhone + '</span>');
+  if (state.type !== null && state.type !== undefined) chips.push('<span class="chip"><b>Tipo:</b> ' + ['Cotización','Instalación','Reparación'][state.type] + '</span>');
+  if (state.customerId) chips.push('<span class="chip"><b>ID:</b> ' + state.customerId + '</span>');
+  if (state.customerConfirmedName) chips.push('<span class="chip"><b>Cliente:</b> ' + state.customerConfirmedName + '</span>');
+  if (state.startDateISO) chips.push('<span class="chip"><b>Fecha:</b> ' + new Date(state.startDateISO).toLocaleString() + '</span>');
+  if (state.duration) chips.push('<span class="chip"><b>Dur:</b> ' + state.duration + '</span>');
+  bar.innerHTML = chips.join('');
+}
+
+function updateLiveFields(state) {
+  if (!state || !lastLookupResult) return;
+  var container = document.getElementById('liveFields');
+  var grid = document.getElementById('liveGrid');
+  var fields = [];
+  if (state.customerId) fields.push({ label:'✓ IDENTIFICADO', value:'ID '+state.customerId });
+  if (state.customerConfirmedName) fields.push({ label:'✓ NOMBRE', value:state.customerConfirmedName });
+  if (state.type !== null && state.type !== undefined) fields.push({ label:'TIPO CITA', value:['Cotización','Instalación','Reparación'][state.type] });
+  if (state.startDateISO) fields.push({ label:'FECHA', value:new Date(state.startDateISO).toLocaleString() });
+  if (state.duration) fields.push({ label:'DURACIÓN', value:state.duration });
+  if (fields.length === 0) { container.style.display = 'none'; return; }
+  container.style.display = 'block';
+  var html = '';
+  for (var i = 0; i < fields.length; i++) {
+    html += '<div class="cf"><div class="lbl">'+fields[i].label+'</div><div class="val hl">'+fields[i].value+'</div></div>';
+  }
+  grid.innerHTML = html;
+}
+
+// ═══ TIMER ═══
+function updateCallTimer() {
+  if (!callStartTime) return;
+  var s = Math.floor((Date.now() - callStartTime) / 1000);
+  document.getElementById('callTimer').textContent =
+    String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+}
+
+function stopCallTimer() {
+  clearInterval(callTimerInterval);
+  document.getElementById('callTimer').className = 'call-timer';
+}
+
+// ═══ HANG UP ═══
+function hangUp() {
+  callActive = false;
+  conversationFinished = true;
+  stopListening();
+  stopCallTimer();
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  isPlaying = false;
+  isProcessing = false;
+
+  setMicIndicator('paused');
+  setStatusBar('idle', '📵 Llamada finalizada');
+  addMessage('system', '📵 Llamada terminada.');
+  document.getElementById('callActiveArea').className = 'call-active-area';
+  document.getElementById('langSelector').style.display = 'none';
+}
+
+function newCall() {
+  callActive = false;
+  conversationFinished = false;
+  callId = null;
+  chosenLanguage = null;
+  lastLookupResult = null;
+  stopListening();
+  stopCallTimer();
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  isPlaying = false;
+  isProcessing = false;
+
+  document.getElementById('callScreen').className = 'panel call-screen';
+  document.getElementById('btnCall').style.display = '';
+  document.getElementById('btnCall').disabled = false;
+  document.getElementById('btnCall').textContent = '📞 Llamar';
+  document.getElementById('customerInfo').className = 'customer-info';
+  document.getElementById('dialerStatus').textContent = '';
+  document.getElementById('callTimer').textContent = '00:00';
+  document.getElementById('customerPhone').value = '';
+  document.getElementById('customerPhone').focus();
+}
+
+// ═══ UI ═══
 function addMessage(role, text, meta) {
-  const div = document.createElement('div');
+  var div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.innerHTML = text.replace(/\n/g, '<br>');
+  if (role === 'user') {
+    div.innerHTML = '<div class="speaker">🧑 Cliente</div>' + escHtml(text);
+  } else if (role === 'ia') {
+    div.innerHTML = '<div class="speaker">🤖 Recepcionista</div>' + escHtml(text);
+  } else {
+    div.innerHTML = escHtml(text);
+  }
   if (meta) {
-    const m = document.createElement('div');
+    var m = document.createElement('div');
     m.className = 'meta';
     m.textContent = meta;
     div.appendChild(m);
   }
-  const container = document.getElementById('transcript');
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+  var c = document.getElementById('transcript');
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
 }
 
-function setStatus(cls, text) {
-  const el = document.getElementById('status');
-  el.className = 'status ' + cls;
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+function setStatusBar(cls, text) {
+  var el = document.getElementById('statusBar');
+  el.className = 'status-bar ' + cls;
   el.textContent = text;
 }
 
-function updateState(state) {
-  const bar = document.getElementById('stateBar');
-  if (!state) { bar.innerHTML = ''; return; }
-  bar.innerHTML = [
-    `<span class="chip"><b>Step:</b> ${state.step}</span>`,
-    `<span class="chip"><b>Lang:</b> ${state.language}</span>`,
-    state.callerPhone ? `<span class="chip"><b>From:</b> ${state.callerPhone}</span>` : '',
-    state.type !== null ? `<span class="chip"><b>Tipo:</b> ${['Cotización','Instalación','Reparación'][state.type]}</span>` : '',
-    state.customerId ? `<span class="chip"><b>ClienteID:</b> ${state.customerId}</span>` : '',
-    state.customerConfirmedName ? `<span class="chip"><b>Cliente:</b> ${state.customerConfirmedName}</span>` :
-      state.customerNameSpoken ? `<span class="chip"><b>Cliente:</b> ${state.customerNameSpoken}</span>` : '',
-    state.identificationAttempts > 0 ? `<span class="chip"><b>Intentos:</b> ${state.identificationAttempts}/3</span>` : '',
-    state.startDateISO ? `<span class="chip"><b>Fecha:</b> ${new Date(state.startDateISO).toLocaleString('es-ES')}</span>` : '',
-    state.duration ? `<span class="chip"><b>Duración:</b> ${state.duration}</span>` : '',
-  ].filter(Boolean).join('');
-}
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-// ─── Language selection → starts conversation ───
-async function startWithLanguage(langChoice) {
-  const btnEs = document.getElementById('btnLangEs');
-  const btnEn = document.getElementById('btnLangEn');
-  btnEs.disabled = true;
-  btnEn.disabled = true;
-  setStatus('speaking', '⏳ Iniciando conversación...');
-
-  // 1. Send null to get the initial greeting ("Para español presione 1...")
-  await sendToServer(null);
-
-  // 2. Small delay then send language choice
-  await new Promise(r => setTimeout(r, 500));
-  addMessage('user', langChoice === '1' ? 'Español (1)' : 'English (2)', 'Selección de idioma');
-  await sendToServer(langChoice);
-
-  // 3. Hide language panel — conversation is active
-  document.getElementById('langPanel').className = 'panel lang-panel done';
-}
-
-function resetConversationFull() {
-  resetConversation();
-  // Show language panel again
-  document.getElementById('langPanel').className = 'panel lang-panel';
-  document.getElementById('btnLangEs').disabled = false;
-  document.getElementById('btnLangEn').disabled = false;
-  lastLookupResult = null;
-  hideCustomerCard();
-}
-
-// ─── Init ───
-window.addEventListener('load', () => {
+// ═══ INIT ═══
+window.addEventListener('load', function() {
   document.getElementById('customerPhone').focus();
+  if (!SpeechRecognition) {
+    console.warn('Web Speech API not supported — voice mode unavailable');
+  }
+  // Unlock audio on first click
+  document.addEventListener('click', function() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      ctx.resume().then(function() { ctx.close(); });
+    } catch(e) {}
+  }, { once: true });
 });
 </script>
 </body>
