@@ -31,10 +31,11 @@ export async function synthesizeAzureMp3(
 
   const voiceName =
     language === 'en'
-      ? env.azureTtsVoiceEn || 'en-US-JennyNeural'
+      ? env.azureTtsVoiceEn || 'en-US-AriaNeural'
       : env.azureTtsVoiceEs || 'es-MX-DaliaNeural';
 
-  const langTag = language === 'en' ? 'en-US' : 'es-MX';
+  // Derive locale tag from voice name (e.g. "es-ES-ElviraNeural" → "es-ES")
+  const langTag = voiceName.split('-').slice(0, 2).join('-');
 
   const enrichedBody = enrichSsmlBody(escapeXml(text));
 

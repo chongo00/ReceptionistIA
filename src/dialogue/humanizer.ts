@@ -109,5 +109,5 @@ export function enrichSsmlBody(text: string): string {
 
   result = result.replace(/,\s+/g, ', <break time="150ms"/> ');
 
-  return `<prosody rate="95%" pitch="+1%">${result}</prosody>`;
+  return `<prosody rate="-5%" pitch="0%">${result}</prosody>`;
 }
