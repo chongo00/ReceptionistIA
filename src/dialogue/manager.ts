@@ -273,8 +273,13 @@ export function handleUserInput(
           };
         }
 
-        // Try LLM to extract the search query (name/phone/email) and handle off-topic
-        const llmName = await llmProcessStep(state, trimmed, buildStepContext(state));
+        // ── Launch LLM extraction and raw-text API search IN PARALLEL ────────
+        // This saves the full LLM round-trip time on the critical path.
+        const [llmName, rawMatches] = await Promise.all([
+          llmProcessStep(state, trimmed, buildStepContext(state)).catch(() => null),
+          findCustomersBySearch(trimmed, 5).catch(() => [] as CustomerMatch[]),
+        ]);
+
         const searchText = (llmName?.data?.searchQuery as string) || trimmed;
 
         state = { ...state, identificationAttempts: state.identificationAttempts + 1 };
@@ -284,10 +289,14 @@ export function handleUserInput(
           return { state, replyText: llmName.reply, isFinished: false };
         }
 
-        let matches: CustomerMatch[] = [];
-        try {
-          matches = await findCustomersBySearch(searchText, 5);
-        } catch {
+        // Use raw matches if searchText === trimmed, otherwise re-query with refined term
+        let matches: CustomerMatch[] = rawMatches;
+        if (searchText.toLowerCase() !== trimmed.toLowerCase()) {
+          try {
+            matches = await findCustomersBySearch(searchText, 5);
+          } catch {
+            matches = rawMatches; // fall back to what we already have
+          }
         }
 
         if (matches.length === 1) {

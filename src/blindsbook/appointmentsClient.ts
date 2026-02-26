@@ -112,12 +112,52 @@ type CustomersListResponse = {
   };
 };
 
+// ─── In-memory search cache ───────────────────────────────────────────────────
+// Key: `${companyId ?? 'default'}::${normalizedTerm}` — TTL 5 min
+// Avoids hitting the BlindsBook API repeatedly for the same phone/name in one call
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CacheEntry {
+  results: CustomerMatch[];
+  expiresAt: number;
+}
+
+const searchCache = new Map<string, CacheEntry>();
+
+function searchCacheKey(term: string): string {
+  return `${currentCompanyId ?? 'default'}::${term.toLowerCase()}`;
+}
+
+function getCachedSearch(term: string): CustomerMatch[] | null {
+  const entry = searchCache.get(searchCacheKey(term));
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    searchCache.delete(searchCacheKey(term));
+    return null;
+  }
+  return entry.results;
+}
+
+function setCachedSearch(term: string, results: CustomerMatch[]): void {
+  searchCache.set(searchCacheKey(term), {
+    results,
+    expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+  });
+}
+
 export async function findCustomersBySearch(
   search: string,
   pageSize = 5,
 ): Promise<CustomerMatch[]> {
   const term = search.trim();
   if (!term) return [];
+
+  // Return cached result if available
+  const cached = getCachedSearch(term);
+  if (cached) {
+    console.log(`[Cache] HIT customer search: "${term}" (${cached.length} results)`);
+    return cached;
+  }
 
   const token = await getBearerToken();
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
@@ -127,7 +167,10 @@ export async function findCustomersBySearch(
   });
 
   const raw = response.data?.data?.customers ?? response.data?.data?.data ?? [];
-  return raw.map(mapCustomer);
+  const results = raw.map(mapCustomer);
+
+  setCachedSearch(term, results);
+  return results;
 }
 
 /** Legacy helper: returns only the first matching customer ID */

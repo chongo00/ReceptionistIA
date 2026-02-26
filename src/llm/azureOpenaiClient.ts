@@ -82,7 +82,7 @@ export async function chatWithAzureOpenAI(
 
   const body: Record<string, unknown> = {
     messages: openaiMessages,
-    max_tokens: 300,    // Short responses for voice
+    max_tokens: 150,    // Voice replies are ≤2 sentences — less tokens = faster first token
     temperature: 0.3,   // Low temperature for consistent responses
   };
 
