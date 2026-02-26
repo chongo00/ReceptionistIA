@@ -1,5 +1,6 @@
-// Unified TTS provider. Priority: Docker Piper (free) → Azure Speech (paid) → null (Twilio <Say> fallback)
-import { isDockerTtsConfigured, synthesizeDockerMp3 } from './dockerTts.js';
+// Unified TTS provider. Priority: Azure Speech (primary) → null (Twilio <Say> fallback)
+// PERF: Docker Piper check commented out — using Azure only in production
+// import { isDockerTtsConfigured, synthesizeDockerMp3 } from './dockerTts.js';
 import { isAzureTtsConfigured, synthesizeAzureMp3 } from './azureNeuralTts.js';
 
 type SpeechLang = 'es' | 'en';
@@ -14,15 +15,15 @@ export async function synthesizeTts(
   text: string,
   language: SpeechLang,
 ): Promise<TtsSynthResult | null> {
-  if (isDockerTtsConfigured()) {
-    try {
-      const result = await synthesizeDockerMp3(text, language);
-      return { ...result, provider: 'docker' };
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[TTS] Docker Piper falló, intentando Azure fallback:', (err as Error).message);
-    }
-  }
+  // PERF: Skip Docker Piper entirely — go straight to Azure Speech
+  // if (isDockerTtsConfigured()) {
+  //   try {
+  //     const result = await synthesizeDockerMp3(text, language);
+  //     return { ...result, provider: 'docker' };
+  //   } catch (err) {
+  //     console.warn('[TTS] Docker Piper falló, intentando Azure fallback:', (err as Error).message);
+  //   }
+  // }
 
   if (isAzureTtsConfigured()) {
     try {

@@ -51,7 +51,7 @@ export async function synthesizeAzureMp3(
     headers: {
       'Ocp-Apim-Subscription-Key': key,
       'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
+      'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3', // PERF: lighter format = faster transfer
       'User-Agent': 'blindsbook-receptionist-ai',
     },
     timeout: 15_000,

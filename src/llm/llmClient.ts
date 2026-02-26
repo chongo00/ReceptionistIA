@@ -20,8 +20,9 @@ export async function getAvailableLlmProvider(): Promise<LlmProvider> {
     const ok = await isAzureOpenAIAvailable();
     if (ok) return 'azure-openai';
   }
-  const ollamaOk = await isOllamaAvailable();
-  if (ollamaOk) return 'ollama';
+  // PERF: skip Ollama availability check (3s HTTP call) — Azure is primary
+  // const ollamaOk = await isOllamaAvailable();
+  // if (ollamaOk) return 'ollama';
   return 'none';
 }
 
@@ -52,17 +53,17 @@ export async function chatWithLlm(
     }
   }
 
-  // Try Ollama fallback
-  const ollamaOk = await isOllamaAvailable();
-  if (ollamaOk) {
-    try {
-      const result = await chatWithOllama(messages, tools);
-      return { ...result, provider: 'ollama' };
-    } catch (err) {
-      console.warn('[LLM] Ollama also failed:', (err as Error).message);
-      throw err;
-    }
-  }
+  // PERF: Ollama fallback commented out — using Azure only in production
+  // const ollamaOk = await isOllamaAvailable();
+  // if (ollamaOk) {
+  //   try {
+  //     const result = await chatWithOllama(messages, tools);
+  //     return { ...result, provider: 'ollama' };
+  //   } catch (err) {
+  //     console.warn('[LLM] Ollama also failed:', (err as Error).message);
+  //     throw err;
+  //   }
+  // }
 
   throw new Error('No LLM provider available. Configure AZURE_OPENAI_* or OLLAMA_URL.');
 }

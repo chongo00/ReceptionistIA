@@ -12,7 +12,7 @@ import axios from 'axios';
 import { loadEnv } from '../config/env.js';
 import type { ChatMessage, ToolCall, ToolDefinition } from './ollamaClient.js';
 
-const LLM_TIMEOUT = 30_000; // 30s
+const LLM_TIMEOUT = 15_000; // 15s — voice calls need fast responses
 
 export function isAzureOpenAIConfigured(): boolean {
   const env = loadEnv();

@@ -32,7 +32,8 @@ export async function isConversationalLlmAvailable(): Promise<boolean> {
   if (_llmAvailableCache && Date.now() - _llmAvailableCache.ts < CACHE_TTL) {
     return _llmAvailableCache.value;
   }
-  const available = isAzureOpenAIConfigured() || await isOllamaAvailable();
+  // PERF: skip Ollama availability check (3s HTTP call) when Azure is configured
+  const available = isAzureOpenAIConfigured() /* || await isOllamaAvailable() */;
   _llmAvailableCache = { value: available, ts: Date.now() };
   return available;
 }
@@ -63,7 +64,9 @@ export async function llmProcessStep(
     if (isAzureOpenAIConfigured()) {
       result = await chatWithAzureOpenAI(messages);
     } else {
-      result = await chatWithOllama(messages);
+      // PERF: Ollama fallback commented out — using Azure only in production
+      // result = await chatWithOllama(messages);
+      return null;
     }
 
     return parseStructuredResponse(result.content);
