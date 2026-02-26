@@ -375,9 +375,13 @@ docker stats blindsbook-ia --no-stream
 ## 16. Guion de Pruebas Paso a Paso (con numeros reales)
 
 > **Instrucciones:** Lee cada guion en orden. Abre `http://localhost:4000/test/voice-test.html`.
-> Puedes usar **modo Voz** (microfono) o **modo Texto** (escribir). Si Edge da error de red
-> en modo Voz, el sistema cambiara automaticamente a modo Texto.
-> Marca [x] en cada paso que funcione correctamente.
+> Puedes usar **modo Voz** (microfono) o **modo Texto** (escribir).
+> En cada guion encontraras:
+> - **Configuracion:** que poner en los campos antes de iniciar
+> - **Dialogo esperado:** la conversacion completa con lo que dice la IA y lo que debes responder
+> - **Verificacion:** que comprobar al final
+>
+> Leyenda: 🤖 = lo que dice la IA | 🧑 = lo que tu dices/escribes | ✅ = estado esperado en la barra inferior
 
 ---
 
@@ -385,15 +389,25 @@ docker stats blindsbook-ia --no-stream
 
 **Cliente:** Maria Elena Rodriguez — Tel: `305-545-2936` — Compania 2 (All Blinds Inc)
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Buscar cliente | Escribir `305-545-2936` en busqueda → Buscar | Tarjeta: Maria Elena Rodriguez, Compania 2 | [ ] |
-| 2 | Verificar auto-config | — | Compania = All Blinds Inc, Caller ID = 305-545-2936 | [ ] |
-| 3 | Seleccionar idioma | Click en **Espanol — Presione 1** | Se envia saludo + idioma, IA responde con identificacion | [ ] |
-| 4 | Verificar identificacion | — | IA dice "Hola Maria Elena!" o similar, step=greeting | [ ] |
-| 5 | Estado | Revisar barra inferior | customerId con valor, customerConfirmedName con nombre | [ ] |
+**Configuracion antes de iniciar:**
+1. Escribir `305-545-2936` en el campo de busqueda y hacer clic en **Buscar**
+2. La tarjeta debe mostrar: *Maria Elena Rodriguez, Compania 2 (All Blinds Inc)*
+3. Los campos se autocompletan: Compania = `+15550000001`, Caller ID = `305-545-2936`
+4. Hacer clic en **Llamar** para iniciar la sesion
 
-**Resultado esperado:** Identificacion automatica sin preguntar nombre. Directo a greeting.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en el boton **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"¡Hola, María Elena! Bienvenida de nuevo a BlindsBook. ¿En qué le puedo ayudar hoy?"*
+
+**Verificacion:**
+- ✅ `step = greeting` — la IA fue directo a saludar sin pedir nombre
+- ✅ `customerId` tiene un valor numerico
+- ✅ `customerConfirmedName = Maria Elena Rodriguez`
+- ✅ No hubo ningun paso intermedio de identificacion
 
 ---
 
@@ -401,162 +415,376 @@ docker stats blindsbook-ia --no-stream
 
 **Cliente:** Brian Williams — Tel: `786-853-4538` — Compania 2 (All Blinds Inc)
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea todo | [ ] |
-| 2 | Buscar cliente | Escribir `786-853-4538` → Buscar | Tarjeta: Brian Williams, Compania 2 | [ ] |
-| 3 | Seleccionar idioma | Click en **English — Press 2** | IA identifica y saluda en ingles: "Hello Brian!" | [ ] |
-| 4 | Verificar idioma | Revisar barra inferior | Lang: en | [ ] |
-| 5 | Pedir cita | Decir/escribir: `I need an appointment` | "Is this for a quote, installation, or repair?" | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion** para resetear
+2. Buscar `786-853-4538` → tarjeta: *Brian Williams, Compania 2*
+3. Click en **Llamar**
 
-**Resultado esperado:** Flujo completo en ingles con cliente anglosajon.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Welcome to BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en el boton **🇺🇸 English — Press 2**)*
+
+> 🤖 IA: *"Hello, Brian! Welcome back to BlindsBook. How can I help you today?"*
+
+> 🧑 Tu: `I need to schedule an appointment`
+
+> 🤖 IA: *"Of course! Is this visit for a quote, an installation, or a repair?"*
+
+**Verificacion:**
+- ✅ `lang = en` en la barra de estado
+- ✅ `step = askType`
+- ✅ `customerId` con valor — identificacion automatica sin pedir nombre
+- ✅ Toda la conversacion en ingles
 
 ---
 
-### GUION 3: Telefono no registrado → Nivel 2 (pedir nombre)
+### GUION 3: Telefono no registrado → Nivel 2 (pedir nombre, 1 resultado)
 
-**Telefono FALSO:** `999-999-9999` — No existe en ninguna compania
+**Cliente real al que se quiere llegar:** Maria Elena Rodriguez — Compania 2
+**Telefono simulado (falso):** `999-999-9999`
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
-| 2 | Config manual | Seleccionar Compania 2 en dropdown. Escribir `999-999-9999` en Caller ID | — | [ ] |
-| 3 | Seleccionar idioma | Click en **Espanol — Presione 1** | IA dice: "No reconozco este numero. Me podria dar su nombre?" | [ ] |
-| 4 | Verificar estado | Revisar barra | step=askCustomerName | [ ] |
-| 5 | Dar nombre real | Escribir: `Maria Elena Rodriguez` | "Encontre a Maria Elena Rodriguez. Es usted?" | [ ] |
-| 6 | Confirmar | Escribir: `si` | "Perfecto, Maria Elena Rodriguez. En que puedo ayudarle?" | [ ] |
-| 7 | Verificar estado | Revisar barra | step=greeting, customerId con valor | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. En el dropdown de compania seleccionar **All Blinds Inc (+15550000001)**
+3. En el campo Caller ID escribir manualmente `999-999-9999`
+4. Click en **Llamar**
 
-**Resultado esperado:** Nivel 1 falla → pasa a Nivel 2 → busca por nombre → confirma identidad.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"Bienvenido. No reconozco este número. ¿Me podría dar su nombre completo o el teléfono con el que está registrado?"*
+
+> 🧑 Tu: `Maria Elena Rodriguez`
+
+> 🤖 IA: *"Encontré a María Elena Rodríguez. ¿Es usted?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Perfecto, María Elena. ¿En qué le puedo ayudar hoy?"*
+
+**Verificacion:**
+- ✅ `step = greeting`
+- ✅ `customerId` con valor
+- ✅ `identificationAttempts = 1`
 
 ---
 
 ### GUION 4: Nombre comun con multiples resultados (desambiguacion)
 
-**Cliente:** JORGE LOPEZ — Tel: `786-239-4584` — Compania 2
+**Cliente real:** Jorge Lopez — Tel real: `786-239-4584` — Compania 2
+**Caller ID simulado:** `999-888-7777` (falso, para forzar busqueda por nombre)
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
-| 2 | Config manual | Compania 2, Caller ID: `999-888-7777` (falso) | — | [ ] |
-| 3 | Seleccionar idioma | Click en **Espanol** | "No reconozco. Me podria dar su nombre?" | [ ] |
-| 4 | Dar nombre comun | Escribir: `Jorge Lopez` | Si hay multiples: "Encontre varios clientes: 1. Jorge Lopez (tel. ***4584)..." | [ ] |
-| 5a | Elegir por numero | Escribir: `1` | "Perfecto, Jorge Lopez." → step=greeting | [ ] |
-| 5b | (Alternativa) Si match unico | — | "Encontre a Jorge Lopez. Es usted?" → escribir "si" | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Compania: **All Blinds Inc (+15550000001)**
+3. Caller ID: `999-888-7777`
+4. Click en **Llamar**
 
-**Resultado esperado:** Nombre comun puede dar multi-match → desambiguacion o match unico.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"Bienvenido. No reconozco este número. ¿Me podría dar su nombre completo?"*
+
+> 🧑 Tu: `Jorge Lopez`
+
+*(Si hay multiples Jorge Lopez en la compania:)*
+
+> 🤖 IA: *"Encontré varios clientes con ese nombre. ¿Podría decirme cuál es usted? 1. Jorge Lopez, teléfono terminado en 4584. 2. Jorge Lopez, teléfono terminado en 2390."*
+
+> 🧑 Tu: `1`
+
+> 🤖 IA: *"Perfecto, Jorge López. ¿En qué le puedo ayudar hoy?"*
+
+*(Si solo hay un Jorge Lopez en la compania:)*
+
+> 🤖 IA: *"Encontré a Jorge López. ¿Es usted?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Perfecto, Jorge. ¿En qué le puedo ayudar?"*
+
+**Verificacion:**
+- ✅ `step = greeting`
+- ✅ `customerId` con valor correcto para Jorge Lopez
 
 ---
 
-### GUION 5: 3 intentos fallidos → Nivel 3 LLM
+### GUION 5: 3 intentos fallidos → Nivel 3 LLM (cliente nuevo)
 
-**Compania 2** — Caller ID falso
+**Compania:** All Blinds Inc — Caller ID falso: `999-111-2222`
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion + config | Compania 2, Caller ID: `999-111-2222` | — | [ ] |
-| 2 | Seleccionar idioma | Click **Espanol** | "No reconozco. Me podria dar su nombre?" | [ ] |
-| 3 | Intento fallido 1 | Escribir: `ZZZZZZ XXXXXX` | "No encontre a ZZZZZZ XXXXXX. Podria intentar con otro nombre?" | [ ] |
-| 4 | Intento fallido 2 | Escribir: `YYYYYY WWWWWW` | "No encontre a YYYYYY WWWWWW..." | [ ] |
-| 5 | Intento fallido 3 | Escribir: `AAAAAA BBBBBB` | Pasa a Nivel 3: "No pude encontrarlo. Recuerda el nombre de su vendedor?" | [ ] |
-| 6 | Verificar estado | Revisar barra | step=llmFallback, identificationAttempts=3 | [ ] |
-| 7 | Indicar cliente nuevo | Escribir: `Es mi primera vez` | LLM: "Le gustaria que lo registre como cliente nuevo?" | [ ] |
-| 8 | Dar nombre nuevo | Escribir: `Roberto Gonzalez` | LLM crea cliente → paso a greeting | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Compania: **All Blinds Inc (+15550000001)**
+3. Caller ID: `999-111-2222`
+4. Click en **Llamar**
 
-**Resultado esperado:** 3 fallos → Nivel 3 → registro de cliente nuevo via LLM.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"Bienvenido. No reconozco este número. ¿Me podría dar su nombre completo?"*
+
+> 🧑 Tu: `ZZZZZZ XXXXXX`
+
+> 🤖 IA: *"No encontré a ZZZZZZ XXXXXX en nuestro sistema. ¿Podría intentarlo con otro nombre o número de teléfono?"*
+
+> 🧑 Tu: `YYYYYY WWWWWW`
+
+> 🤖 IA: *"Tampoco encontré ese nombre. ¿Tiene otro teléfono o nombre con el que podría estar registrado?"*
+
+> 🧑 Tu: `AAAAAA BBBBBB`
+
+*(Despues del 3er intento fallido, activa Nivel 3 LLM)*
+
+> 🤖 IA: *"No he podido encontrarle con la información proporcionada. ¿Recuerda el nombre de su asesor de ventas, o es la primera vez que nos contacta?"*
+
+> 🧑 Tu: `Es mi primera vez, nunca he llamado antes`
+
+> 🤖 IA: *"Entendido. ¿Le gustaría que lo registre como cliente nuevo? Necesitaría su nombre completo."*
+
+> 🧑 Tu: `Sí, me llamo Roberto Gonzalez`
+
+> 🤖 IA: *"Perfecto, Roberto González. Le he registrado en nuestro sistema. ¿En qué le puedo ayudar hoy?"*
+
+**Verificacion:**
+- ✅ `step = llmFallback` — activado en el 3er intento
+- ✅ Al dar nombre nuevo, `step = greeting` con nuevo `customerId`
+- ✅ `identificationAttempts = 3`
 
 ---
 
 ### GUION 6: Sin Caller ID → pide nombre directo
 
-**Compania 163 (Sophie Blinds LLC)** — Sin Caller ID
+**Cliente real:** Mabel Mendoza — Compania 163 (Sophie Blinds LLC)
+**Caller ID:** vacio (sin numero)
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
-| 2 | Config manual | Compania 163, **borrar** el campo Caller ID (dejar vacio) | — | [ ] |
-| 3 | Seleccionar idioma | Click **Espanol** | "Bienvenido a BlindsBook. Me podria dar su nombre o telefono?" | [ ] |
-| 4 | Dar nombre | Escribir: `Mabel Mendoza` | "Encontre a Mabel Mendoza. Es usted?" | [ ] |
-| 5 | Confirmar | Escribir: `si` | "Perfecto, Mabel Mendoza." → step=greeting | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Compania: **Sophie Blinds LLC (+15550000002)**
+3. Campo Caller ID: **borrar completamente** (dejar en blanco)
+4. Click en **Llamar**
 
-**Resultado esperado:** Sin caller phone → directo a Nivel 2 → busca por nombre.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"Bienvenido a BlindsBook. ¿Me podría dar su nombre completo o el número de teléfono con el que está registrado?"*
+
+> 🧑 Tu: `Mabel Mendoza`
+
+> 🤖 IA: *"Encontré a Mabel Mendoza. ¿Es usted?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Perfecto, Mabel. ¿En qué le puedo ayudar hoy?"*
+
+**Verificacion:**
+- ✅ Sin Caller ID → va directo a Nivel 2 (pedir nombre), no intenta Nivel 1
+- ✅ `step = greeting`
+- ✅ `customerId` con valor para compania 163
 
 ---
 
-### GUION 7: Compania diferente (Sophie Blinds LLC, compania 163)
+### GUION 7: Multi-tenant — Compania 163 (Sophie Blinds LLC)
 
-**Cliente:** PAULINO HERNANDEZ — Tel: `786-236-0929` — Compania 163
+**Cliente:** Paulino Hernandez — Tel: `786-236-0929` — Compania 163
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Se resetea | [ ] |
-| 2 | Buscar cliente | Escribir `786-236-0929` → Buscar | Tarjeta: PAULINO HERNANDEZ, Compania 163 | [ ] |
-| 3 | Verificar auto-config | — | Compania = Sophie Blinds LLC (+15550000002), Caller ID = 786-236-0929 | [ ] |
-| 4 | Seleccionar idioma | Click **Espanol** | IA identifica: "Hola Paulino!" | [ ] |
-| 5 | Verificar multi-tenant | Revisar barra | customerId con valor correcto para compania 163 | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Buscar `786-236-0929` → tarjeta: *Paulino Hernandez, Compania 163*
+3. Verificar que el dropdown cambia automaticamente a **Sophie Blinds LLC (+15550000002)**
+4. Click en **Llamar**
 
-**Resultado esperado:** El sistema busca en la compania correcta (163, no 2).
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"¡Hola, Paulino! Bienvenido a BlindsBook. ¿En qué le puedo ayudar?"*
+
+**Verificacion:**
+- ✅ El sistema identifico al cliente de la compania 163, NO de la compania 2
+- ✅ `customerId` corresponde a Paulino Hernandez en compania 163
+- ✅ `step = greeting` — identificacion automatica
 
 ---
 
-### GUION 8: Flujo COMPLETO de cita (identificacion → cita creada)
+### GUION 8: Flujo COMPLETO de cita — espanol (identificacion → cita creada en BD)
 
 **Cliente:** Diosdado Fernandez — Tel: `305-362-1270` — Compania 2
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | Step | OK? |
-|---|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Reset | — | [ ] |
-| 2 | Buscar cliente | `305-362-1270` → Buscar | Tarjeta: Diosdado Fernandez | — | [ ] |
-| 3 | Seleccionar idioma | Click **Espanol** | "Hola Diosdado!" | greeting | [ ] |
-| 4 | Pedir cita | `quiero agendar una cita` | "Es para cotizacion, instalacion o reparacion?" | askType | [ ] |
-| 5 | Tipo | `cotizacion` | "Perfecto, agendaremos cotizacion. Para que fecha?" | askDate | [ ] |
-| 6 | Fecha | `manana` | "Para el [fecha]. A que hora?" | askTime | [ ] |
-| 7 | Hora | `a las 10 de la manana` | "Cita el [fecha] 10:00. Duracion 1 hora. Esta bien?" | askDuration | [ ] |
-| 8 | Duracion | `si` | Resumen completo: Tipo, Cliente, Fecha, Hora, Duracion. "Correcto?" | confirmSummary | [ ] |
-| 9 | Confirmar | `si` | "Su cita ha sido registrada exitosamente." | completed | [ ] |
-| 10 | Verificar tarjeta | Revisar customer card | Debe mostrar: TIPO CITA, FECHA CITA, NOMBRE CONFIRMADO en verde | — | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Buscar `305-362-1270` → verificar tarjeta: *Diosdado Fernandez, Compania 2*
+3. Click en **Llamar**
 
-**Resultado esperado:** Flujo completo desde identificacion hasta creacion de cita en la BD.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"¡Hola, Diosdado! Bienvenido de nuevo a BlindsBook. ¿En qué le puedo ayudar hoy?"*
+
+> 🧑 Tu: `quiero agendar una cita`
+
+> 🤖 IA: *"Con gusto le ayudo. ¿La visita sería para una cotización, una instalación o una reparación?"*
+
+> 🧑 Tu: `cotización`
+
+> 🤖 IA: *"Perfecto, agendaremos una cotización. ¿Para qué fecha le vendría bien?"*
+
+> 🧑 Tu: `mañana`
+
+> 🤖 IA: *"Muy bien, para el [fecha de mañana]. ¿A qué hora le gustaría la cita?"*
+
+> 🧑 Tu: `a las 10 de la mañana`
+
+> 🤖 IA: *"La cita sería el [fecha] a las 10:00 AM. La duración estándar es 1 hora. ¿Le parece bien?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Perfecto. Déjeme confirmar: Cotización para Diosdado Fernández el [fecha] a las 10:00 AM, duración 1 hora. ¿Está todo correcto?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"¡Excelente! Su cita ha sido registrada exitosamente. ¡Que tenga un excelente día, Diosdado!"*
+
+**Verificacion:**
+- ✅ `step = completed` — flujo terminado
+- ✅ La tarjeta de cliente muestra TIPO CITA, FECHA CITA en verde
+- ✅ Ejecutar `node scripts/check-appointments.cjs --last 1` en terminal — debe aparecer la cita con `CreatedBy: ai_agent_callcenter@blindsbook.com`
 
 ---
 
-### GUION 9: Flujo completo en INGLES
+### GUION 9: Flujo completo en INGLES (fecha y hora en un solo turno)
 
 **Cliente:** Althea Mcmillan — Tel: `305-904-2387` — Compania 2
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | Step | OK? |
-|---|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Reset | — | [ ] |
-| 2 | Buscar cliente | `305-904-2387` → Buscar | Tarjeta: Althea Mcmillan | — | [ ] |
-| 3 | Seleccionar idioma | Click **English — Press 2** | "Hello Althea!" | greeting | [ ] |
-| 4 | Pedir cita | `I need to schedule an appointment` | "Is this for a quote, installation, or repair?" | askType | [ ] |
-| 5 | Tipo | `installation` | "We'll schedule an installation. What date?" | askDate | [ ] |
-| 6 | Fecha y hora | `next Monday at 2 PM` | "Appointment on [date] 2:00 PM. Duration 1 hour. OK?" | askDuration | [ ] |
-| 7 | Confirmar duracion | `yes` | Resumen en ingles. "Is this correct?" | confirmSummary | [ ] |
-| 8 | Confirmar | `yes` | "Your appointment has been registered." | completed | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Buscar `305-904-2387` → verificar tarjeta: *Althea Mcmillan, Compania 2*
+3. Click en **Llamar**
 
-**Resultado esperado:** Todo el flujo en ingles, fecha+hora combinadas saltan askTime.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Welcome to BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇺🇸 English — Press 2**)*
+
+> 🤖 IA: *"Hello, Althea! Welcome back to BlindsBook. How can I help you today?"*
+
+> 🧑 Tu: `I need to schedule an appointment`
+
+> 🤖 IA: *"Of course! Is this visit for a quote, an installation, or a repair?"*
+
+> 🧑 Tu: `installation`
+
+> 🤖 IA: *"Great, we'll schedule an installation. What date works for you?"*
+
+> 🧑 Tu: `next Monday at 2 PM`
+
+*(La IA detecta fecha y hora juntas, salta el paso askTime)*
+
+> 🤖 IA: *"Perfect, next Monday at 2:00 PM. The standard duration is 1 hour. Does that work for you?"*
+
+> 🧑 Tu: `yes`
+
+> 🤖 IA: *"Let me confirm: Installation for Althea McMillan on [date] at 2:00 PM, 1 hour. Is everything correct?"*
+
+> 🧑 Tu: `yes`
+
+> 🤖 IA: *"Your appointment has been successfully registered. Have a wonderful day, Althea!"*
+
+**Verificacion:**
+- ✅ `step = completed`
+- ✅ `lang = en` en todo el flujo
+- ✅ El paso `askTime` NO aparecio (fecha y hora se dieron juntas)
+- ✅ Verificar con `node scripts/check-appointments.cjs --last 1`
 
 ---
 
-### GUION 10: Area code diferente (954 — Broward) y cancelar cita
+### GUION 10: Cancelar en confirmacion y reiniciar — area code 954
 
-**Cliente:** SONIA IGLESIAS — Tel: `954-438-4043` — Compania 2
+**Cliente:** Sonia Iglesias — Tel: `954-438-4043` — Compania 2
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | Step | OK? |
-|---|---|---|---|---|---|
-| 1 | Nueva conversacion | Click **Nueva conversacion** | Reset | — | [ ] |
-| 2 | Buscar cliente | `954-438-4043` → Buscar | Tarjeta: SONIA IGLESIAS, Compania 2 | — | [ ] |
-| 3 | Seleccionar idioma | Click **Espanol** | "Hola Sonia!" | greeting | [ ] |
-| 4 | Pedir cita | `necesito una cita` | "Cotizacion, instalacion o reparacion?" | askType | [ ] |
-| 5 | Tipo | `reparacion` | "Agendaremos reparacion. Para que fecha?" | askDate | [ ] |
-| 6 | Fecha | `el viernes` | "Para el [viernes]. A que hora?" | askTime | [ ] |
-| 7 | Hora | `a las 3` | Resumen parcial. "Duracion 1 hora. Esta bien?" | askDuration | [ ] |
-| 8 | Duracion | `si` | Resumen completo. "Correcto?" | confirmSummary | [ ] |
-| 9 | **CANCELAR** | `no` | "De acuerdo, empecemos de nuevo. Cotizacion, instalacion o reparacion?" | askType | [ ] |
-| 10 | Verificar | — | El flujo vuelve a askType, NO se creo cita | — | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Buscar `954-438-4043` → verificar tarjeta: *Sonia Iglesias, Compania 2*
+3. Click en **Llamar**
 
-**Resultado esperado:** Area code 954 funciona. Al decir "no" en confirmacion, vuelve al inicio del flujo de cita.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"¡Hola, Sonia! Bienvenida a BlindsBook. ¿En qué le puedo ayudar?"*
+
+> 🧑 Tu: `necesito una cita`
+
+> 🤖 IA: *"¿La visita es para cotización, instalación o reparación?"*
+
+> 🧑 Tu: `reparación`
+
+> 🤖 IA: *"Muy bien. ¿Para qué fecha necesita la reparación?"*
+
+> 🧑 Tu: `el viernes`
+
+> 🤖 IA: *"Para el viernes [fecha]. ¿A qué hora le vendría bien?"*
+
+> 🧑 Tu: `a las 3 de la tarde`
+
+> 🤖 IA: *"El viernes a las 3:00 PM. La duración estándar es 1 hora. ¿Le parece bien?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Perfecto. Reparación para Sonia Iglesias el [viernes] a las 3:00 PM, 1 hora. ¿Está correcto?"*
+
+> 🧑 Tu: `no, quiero cambiarlo`
+
+> 🤖 IA: *"De acuerdo, empecemos de nuevo. ¿La visita sería para cotización, instalación o reparación?"*
+
+*(El flujo vuelve a askType — NO se creo ninguna cita)*
+
+> 🧑 Tu: `cotización`
+
+> 🤖 IA: *"Agendaremos una cotización. ¿Para qué fecha?"*
+
+> 🧑 Tu: `el lunes`
+
+> 🤖 IA: *"Para el lunes [fecha]. ¿A qué hora?"*
+
+> 🧑 Tu: `a las 11`
+
+> 🤖 IA: *"El lunes a las 11:00 AM, 1 hora. ¿Le parece bien?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Cotización para Sonia Iglesias el [lunes] a las 11:00 AM, 1 hora. ¿Está correcto?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"¡Su cita ha sido registrada exitosamente! Que tenga un buen día, Sonia."*
+
+**Verificacion:**
+- ✅ Al decir "no" en confirmacion, el flujo volvio a `askType` sin crear cita
+- ✅ La segunda cita (cotizacion del lunes) SI se creo en la BD
+- ✅ `step = completed`
 
 ---
 
@@ -564,39 +792,122 @@ docker stats blindsbook-ia --no-stream
 
 **Cliente:** Russ Nordahl — Tel: `404-384-2663` — Compania 163
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion + Buscar | `404-384-2663` → Buscar | Tarjeta: Russ Nordahl, Compania 163 | [ ] |
-| 2 | Seleccionar idioma | Click **English** | "Hello Russ!" | [ ] |
-| 3 | Verificar | Revisar barra | step=greeting, customerId con valor | [ ] |
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Buscar `404-384-2663` → verificar tarjeta: *Russ Nordahl, Compania 163 (Sophie Blinds LLC)*
+3. Click en **Llamar**
 
-**Resultado esperado:** Telefonos de fuera de Florida (area code 404) funcionan igual.
+**Dialogo esperado:**
+
+> 🤖 IA: *"Welcome to BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇺🇸 English — Press 2**)*
+
+> 🤖 IA: *"Hello, Russ! Welcome back to BlindsBook. How can I help you today?"*
+
+> 🧑 Tu: `I'd like to schedule a quote`
+
+> 🤖 IA: *"Of course! What date works for you?"*
+
+> 🧑 Tu: `this Friday`
+
+> 🤖 IA: *"This Friday [date]. What time would you prefer?"*
+
+> 🧑 Tu: `at 9 in the morning`
+
+> 🤖 IA: *"Friday at 9:00 AM, 1 hour. Does that work for you?"*
+
+> 🧑 Tu: `yes`
+
+> 🤖 IA: *"Quote for Russ Nordahl on [Friday] at 9:00 AM. Is everything correct?"*
+
+> 🧑 Tu: `yes`
+
+> 🤖 IA: *"Your appointment has been registered. Have a great day, Russ!"*
+
+**Verificacion:**
+- ✅ Area code 404 (fuera de FL) no causa ningun problema
+- ✅ Cliente de compania 163 correctamente identificado
+- ✅ `step = completed`
 
 ---
 
-### GUION 12: Apellido dificil de pronunciar (test de voz)
+### GUION 12: Apellido dificil de pronunciar — test de calidad TTS
 
-**Cliente:** BLAKE LICKTEIG — Tel: `305-522-1365` — Compania 163
+**Cliente:** Blake Lickteig — Tel: `305-522-1365` — Compania 163
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Nueva conversacion + Buscar | `305-522-1365` → Buscar | Tarjeta: BLAKE LICKTEIG, Compania 163 | [ ] |
-| 2 | Seleccionar idioma | Click **English** | "Hello Blake!" (o "Blake Lickteig") | [ ] |
-| 3 | Verificar por voz | Escuchar audio TTS | La IA pronuncia el nombre correctamente | [ ] |
+> **Objetivo:** Verificar que la voz Azure Speech Neural pronuncia correctamente nombres y apellidos inusuales.
 
-**Resultado esperado:** El TTS pronuncia el apellido de forma inteligible.
+**Configuracion antes de iniciar:**
+1. Click en **Nueva conversacion**
+2. Buscar `305-522-1365` → verificar tarjeta: *Blake Lickteig, Compania 163*
+3. Asegurarse de tener audio/parlantes activos
+4. Click en **Llamar**
+
+**Dialogo esperado:**
+
+> 🤖 IA: *"Welcome to BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇺🇸 English — Press 2**)*
+
+> 🤖 IA: *"Hello, Blake! Welcome back to BlindsBook. How can I help you today?"*
+> *(Escuchar: ¿pronuncia "Lick-tig" de forma inteligible? ¿El saludo suena natural?)*
+
+> 🧑 Tu: `just checking in`
+
+> 🤖 IA: *"Of course! Is there anything I can help you with today, like scheduling a quote, installation, or repair?"*
+
+**Verificacion:**
+- ✅ La voz Azure Neural pronuncia "Blake" claramente
+- ✅ El apellido "Lickteig" en la frase de saludo es inteligible (Azure hace un intento razonable)
+- ✅ La velocidad de la voz es natural (no acelerada, no lenta)
+- ✅ Las pausas entre oraciones suenan naturales
 
 ---
 
-### GUION 13: Busqueda de cliente que aparece en 2 companias
+### GUION 13: Cliente registrado en 2 companias — verificar busqueda correcta
 
-**Telefono:** `305-323-2397` (Mabel Mendoza en compania 163)
+**Telefono:** `305-323-2397` — Mabel Mendoza aparece en compania 163
 
-| Paso | Accion | Que escribir / decir | Respuesta esperada | OK? |
-|---|---|---|---|---|
-| 1 | Buscar | `305-323-2397` → Buscar | Muestra resultado. Verificar: totalResults y companias buscadas | [ ] |
-| 2 | Verificar | — | Si aparece en mas de 1 compania, la tarjeta muestra el primer resultado | [ ] |
-| 3 | Verificar auto-config | — | toNumber debe ser +15550000002 (compania 163) | [ ] |
+**Objetivo:** Verificar que la busqueda por telefono devuelve el cliente y configura la compania correcta.
+
+**Pasos de verificacion inicial (antes de llamar):**
+1. Escribir `305-323-2397` en busqueda
+2. Click en **Buscar**
+3. Leer la tarjeta resultante: ¿Que compania aparece? ¿Cual es el `toNumber` que se autocompleto?
+
+**Dialogo esperado (una vez configurado con compania 163):**
+
+> 🤖 IA: *"Bienvenido a BlindsBook. Para español presione 1, for English press 2."*
+
+> 🧑 Tu: *(Click en **🇪🇸 Español — Presione 1**)*
+
+> 🤖 IA: *"¡Hola, Mabel! Bienvenida a BlindsBook. ¿En qué le puedo ayudar hoy?"*
+
+> 🧑 Tu: `quiero una cita para cotizar`
+
+> 🤖 IA: *"Con gusto. ¿Para qué fecha le viene bien?"*
+
+> 🧑 Tu: `el miercoles en la tarde`
+
+> 🤖 IA: *"El miércoles [fecha] en la tarde. ¿A qué hora exactamente?"*
+
+> 🧑 Tu: `a las 2`
+
+> 🤖 IA: *"El miércoles a las 2:00 PM, 1 hora. ¿Le parece bien?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"Cotización para Mabel Mendoza el [miércoles] a las 2:00 PM. ¿Está correcto?"*
+
+> 🧑 Tu: `sí`
+
+> 🤖 IA: *"¡Su cita quedó registrada! Que tenga un buen día, Mabel."*
+
+**Verificacion:**
+- ✅ `toNumber = +15550000002` (compania 163, Sophie Blinds LLC)
+- ✅ `customerId` corresponde a Mabel Mendoza en compania 163
+- ✅ `step = completed` — cita creada
 
 ---
 
@@ -604,19 +915,18 @@ docker stats blindsbook-ia --no-stream
 
 | Guion | Nivel | Escenario | Cliente | Telefono |
 |---|---|---|---|---|
-| 1 | Nivel 1 | Match unico, espanol | Maria Elena Rodriguez | `305-545-2936` |
-| 2 | Nivel 1 | Match unico, ingles | Brian Williams | `786-853-4538` |
-| 3 | Nivel 2 | Telefono falso → buscar por nombre | Maria Elena Rodriguez | `999-999-9999` |
-| 4 | Nivel 2 | Nombre comun, desambiguacion | Jorge Lopez | `786-239-4584` |
-| 5 | Nivel 3 | 3 fallos → LLM → cliente nuevo | (nuevo) | `999-111-2222` |
-| 6 | Nivel 2 | Sin Caller ID | Mabel Mendoza | (vacio) |
-| 7 | Nivel 1 | Multi-tenant (compania 163) | Paulino Hernandez | `786-236-0929` |
-| 8 | Completo | Cita completa espanol | Diosdado Fernandez | `305-362-1270` |
-| 9 | Completo | Cita completa ingles | Althea Mcmillan | `305-904-2387` |
-| 10 | Completo | Cancelar y reiniciar cita | Sonia Iglesias | `954-438-4043` |
-| 11 | Nivel 1 | Area code fuera de FL | Russ Nordahl | `404-384-2663` |
-| 12 | Nivel 1 | Apellido dificil (TTS) | Blake Lickteig | `305-522-1365` |
-| 13 | Busqueda | Multi-compania lookup | Mabel Mendoza | `305-323-2397` |
+| 1 | Nivel 1 | Caller ID match unico, espanol | Maria Elena Rodriguez | `305-545-2936` |
+| 2 | Nivel 1 | Caller ID match unico, ingles | Brian Williams | `786-853-4538` |
+| 3 | Nivel 2 | Telefono falso → buscar por nombre → 1 resultado | Maria Elena Rodriguez | `999-999-9999` |
+| 4 | Nivel 2 | Telefono falso → nombre comun → desambiguacion | Jorge Lopez | `999-888-7777` |
+| 5 | Nivel 3 | 3 fallos → LLM → registro cliente nuevo | (nuevo) | `999-111-2222` |
+| 6 | Nivel 2 | Sin Caller ID → pide nombre directo | Mabel Mendoza | (vacio) |
+| 7 | Nivel 1 | Multi-tenant — compania 163 | Paulino Hernandez | `786-236-0929` |
+| 8 | Completo | Cita completa espanol — todos los pasos | Diosdado Fernandez | `305-362-1270` |
+| 9 | Completo | Cita completa ingles — fecha+hora juntas | Althea Mcmillan | `305-904-2387` |
+| 10 | Completo | Cancelar en confirmacion y reiniciar | Sonia Iglesias | `954-438-4043` |
+| 11 | Completo | Area code fuera FL (404 Atlanta) | Russ Nordahl | `404-384-2663` |
+| 12 | TTS | Apellido dificil — calidad de voz | Blake Lickteig | `305-522-1365` |
+| 13 | Busqueda | Cliente en 2 companias — compania correcta | Mabel Mendoza | `305-323-2397` |
 
-*Última actualización: Febrero 2026*
-
+*Ultima actualizacion: Febrero 2026*
