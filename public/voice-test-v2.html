@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BlindsBook — Simulador de Llamada IA v2 (WebSocket)</title>
+<style>
+  :root { --bg:#0a0f1a; --card:#141c2e; --accent:#3b82f6; --green:#22c55e; --red:#ef4444; --yellow:#eab308; --text:#e2e8f0; --mute:#94a3b8; --border:#2d3a50; --dark:#0d1220; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:16px; }
+
+  .header { text-align:center; margin-bottom:16px; }
+  .header h1 { font-size:1.4rem; display:flex; align-items:center; justify-content:center; gap:10px; }
+  .header h1 .phone-icon { font-size:1.6rem; animation: ring 2s ease-in-out infinite; }
+  @keyframes ring { 0%,20%,50%,80%,100%{transform:rotate(0)} 10%{transform:rotate(12deg)} 30%{transform:rotate(-10deg)} 40%{transform:rotate(8deg)} }
+  .header .subtitle { color:var(--mute); font-size:.8rem; margin-top:4px; }
+  .header .badge { display:inline-block; background:var(--green); color:#fff; padding:2px 10px; border-radius:12px; font-size:.7rem; font-weight:600; margin-top:6px; }
+
+  .panel { background:var(--card); border-radius:14px; padding:18px; width:100%; max-width:720px; margin-bottom:12px; border:1px solid var(--border); }
+  .panel h2 { font-size:.95rem; margin-bottom:10px; color:var(--accent); display:flex; align-items:center; gap:8px; }
+
+  .dialer-row { display:flex; gap:8px; }
+  .dialer-row input { flex:1; background:#1a2440; border:1px solid var(--border); color:var(--text); padding:12px 16px; border-radius:10px; font-size:1.1rem; letter-spacing:1px; font-weight:600; }
+  .dialer-row input::placeholder { color:#4a5568; font-weight:400; letter-spacing:0; }
+
+  .btn { border:none; padding:10px 22px; border-radius:10px; font-size:.9rem; font-weight:600; cursor:pointer; transition:all .15s; display:inline-flex; align-items:center; gap:8px; }
+  .btn-call { background:var(--green); color:#fff; padding:12px 28px; font-size:1rem; }
+  .btn-call:hover { background:#16a34a; transform:scale(1.02); }
+  .btn-call:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+
+  .connection-status { display:flex; align-items:center; gap:8px; padding:8px 16px; border-radius:10px; font-size:.8rem; margin-bottom:12px; }
+  .connection-status.connected { background:#14532d44; color:#4ade80; border:1px solid #22c55e44; }
+  .connection-status.disconnected { background:#45090944; color:#fca5a5; border:1px solid #ef444444; }
+  .connection-status.connecting { background:#42200644; color:#fbbf24; border:1px solid #eab30844; }
+  .connection-dot { width:8px; height:8px; border-radius:50%; }
+  .connection-status.connected .connection-dot { background:#4ade80; box-shadow:0 0 8px #22c55e; }
+  .connection-status.disconnected .connection-dot { background:#ef4444; }
+  .connection-status.connecting .connection-dot { background:#fbbf24; animation:blink 1s infinite; }
+  @keyframes blink { 50%{opacity:.3} }
+
+  .call-screen { display:none; }
+  .call-screen.active { display:block; }
+
+  .lang-selector { text-align:center; padding:20px 0; }
+  .lang-buttons { display:flex; gap:14px; justify-content:center; }
+  .btn-lang { padding:16px 36px; font-size:1rem; font-weight:700; border-radius:12px; border:2px solid var(--border); background:#1a2440; color:var(--text); cursor:pointer; transition:all .2s; min-width:180px; }
+  .btn-lang:hover { border-color:var(--accent); background:#1e3a5f; transform:translateY(-2px); }
+  .btn-lang:disabled { opacity:.3; cursor:not-allowed; transform:none; }
+  .btn-lang .flag { font-size:1.8rem; display:block; margin-bottom:6px; }
+
+  .status-bar { text-align:center; padding:10px; border-radius:10px; font-size:.85rem; font-weight:500; margin-bottom:6px; }
+  .status-bar.idle { background:#1a2440; color:var(--mute); }
+  .status-bar.listening { background:#14532d; color:#4ade80; border:1px solid #22c55e44; }
+  .status-bar.speaking { background:#1e3a5f; color:#60a5fa; border:1px solid #3b82f644; }
+  .status-bar.processing { background:#422006; color:#fbbf24; }
+  .status-bar.error { background:#450a0a; color:#fca5a5; }
+
+  .call-active-area { display:none; text-align:center; padding:10px 0; }
+  .call-active-area.visible { display:block; }
+
+  .mic-indicator { display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:12px; padding:12px 20px; border-radius:12px; font-size:.9rem; font-weight:500; }
+  .mic-indicator.listening { background:#14532d55; color:#4ade80; border:1px solid #22c55e33; }
+  .mic-indicator.speaking { background:#1e3a5f55; color:#60a5fa; border:1px solid #3b82f633; }
+  .mic-indicator.processing { background:#42200655; color:#fbbf24; border:1px solid #eab30833; }
+  .mic-indicator.paused { background:#1a244055; color:var(--mute); border:1px solid var(--border); }
+
+  .sound-wave { display:inline-flex; align-items:center; gap:2px; height:20px; }
+  .sound-wave .bar { width:4px; background:currentColor; border-radius:2px; animation:wave 0.8s ease-in-out infinite; }
+  .sound-wave .bar:nth-child(1) { height:8px; animation-delay:0s; }
+  .sound-wave .bar:nth-child(2) { height:14px; animation-delay:0.1s; }
+  .sound-wave .bar:nth-child(3) { height:20px; animation-delay:0.2s; }
+  .sound-wave .bar:nth-child(4) { height:14px; animation-delay:0.3s; }
+  .sound-wave .bar:nth-child(5) { height:8px; animation-delay:0.4s; }
+  @keyframes wave { 0%,100%{transform:scaleY(0.4)} 50%{transform:scaleY(1)} }
+
+  .interim-text { font-size:.85rem; color:#4ade80; font-style:italic; min-height:24px; margin-bottom:12px; padding:0 20px; word-break:break-word; }
+
+  .btn-hangup-big { width:90px; height:90px; border-radius:50%; border:none; background:var(--red); color:#fff; font-size:2.2rem; cursor:pointer; transition:all .2s; display:inline-flex; align-items:center; justify-content:center; box-shadow:0 4px 20px #ef444444; }
+  .btn-hangup-big:hover { background:#dc2626; transform:scale(1.08); box-shadow:0 6px 30px #ef444466; }
+  .hangup-label { font-size:.8rem; color:var(--red); margin-top:10px; font-weight:500; }
+
+  .text-fallback { margin-top:16px; }
+  .text-input-row { display:flex; gap:8px; }
+  .text-input-row input { flex:1; background:#1a2440; border:1px solid var(--border); color:var(--text); padding:12px 16px; border-radius:10px; font-size:.95rem; }
+  .btn-sm { padding:8px 16px; font-size:.85rem; border-radius:8px; }
+  .btn-primary { background:var(--accent); color:#fff; }
+  .btn-primary:hover { background:#2563eb; }
+
+  .transcript { max-height:380px; overflow-y:auto; padding:6px 0; min-height:80px; }
+  .transcript::-webkit-scrollbar { width:4px; }
+  .transcript::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+  .msg { margin-bottom:10px; padding:12px 16px; border-radius:14px; max-width:85%; line-height:1.5; font-size:.9rem; }
+  .msg.user { background:#1a2440; margin-left:auto; text-align:right; border-bottom-right-radius:4px; border:1px solid var(--border); }
+  .msg.ia { background:#0d2847; border-bottom-left-radius:4px; border:1px solid #1e3a5f; }
+  .msg.system { background:transparent; text-align:center; color:var(--mute); font-size:.78rem; border:1px dashed var(--border); max-width:100%; }
+  .msg .speaker { font-size:.7rem; font-weight:600; margin-bottom:4px; }
+  .msg.user .speaker { color:var(--green); }
+  .msg.ia .speaker { color:var(--accent); }
+
+  .finished-overlay { display:none; text-align:center; padding:24px; }
+  .finished-overlay.visible { display:block; animation:fadeIn .5s ease; }
+  .finished-overlay .check { font-size:3rem; }
+  .finished-overlay h3 { color:var(--green); margin:8px 0; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+
+  .call-timer { font-size:.8rem; color:var(--mute); text-align:center; font-variant-numeric:tabular-nums; margin-bottom:8px; }
+  .call-timer.active { color:var(--green); }
+
+  .debug-log { background:#0d1220; border:1px solid var(--border); border-radius:8px; padding:8px 12px; margin-top:8px; font-size:.72rem; font-family:monospace; max-height:100px; overflow-y:auto; display:none; }
+  .debug-log.visible { display:block; }
+  .debug-log .line { padding:1px 0; color:var(--mute); }
+  .debug-log .line.ok { color:#4ade80; }
+  .debug-log .line.warn { color:#fbbf24; }
+  .debug-log .line.err { color:#f87171; }
+
+  .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--mute); padding:8px 16px; border-radius:8px; font-size:.8rem; cursor:pointer; }
+  .btn-ghost:hover { border-color:var(--accent); color:var(--text); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1><span class="phone-icon">📞</span> BlindsBook — Simulador de Llamada v2</h1>
+  <p class="subtitle">Reconocimiento de voz profesional con Azure Speech SDK</p>
+  <span class="badge">🎤 Azure STT + TTS Neural</span>
+</div>
+
+<!-- CONNECTION STATUS -->
+<div class="connection-status disconnected" id="connectionStatus">
+  <div class="connection-dot"></div>
+  <span id="connectionText">Desconectado</span>
+</div>
+
+<!-- PHONE DIALER -->
+<div class="panel" id="dialerPanel">
+  <h2>📱 Iniciar Llamada</h2>
+  <div class="dialer-row">
+    <input type="text" id="customerPhone" placeholder="Teléfono del cliente (opcional)" autocomplete="off" />
+    <button class="btn btn-call" id="btnCall" onclick="startCall()">📞 Llamar</button>
+  </div>
+  <p style="color:var(--mute);font-size:.75rem;margin-top:8px;">Puedes dejar el teléfono vacío para una prueba rápida.</p>
+</div>
+
+<!-- CALL SCREEN -->
+<div class="panel call-screen" id="callScreen">
+  <div class="call-timer" id="callTimer">00:00</div>
+  <div class="status-bar idle" id="statusBar">Conectando...</div>
+
+  <!-- Language Selector -->
+  <div class="lang-selector" id="langSelector">
+    <div style="color:var(--text);font-size:.95rem;margin-bottom:16px;">Selecciona el idioma:</div>
+    <div class="lang-buttons">
+      <button class="btn-lang" id="btnLang1" onclick="selectLanguage('es')" disabled>
+        <span class="flag">🇪🇸</span> Español
+      </button>
+      <button class="btn-lang" id="btnLang2" onclick="selectLanguage('en')" disabled>
+        <span class="flag">🇺🇸</span> English
+      </button>
+    </div>
+  </div>
+
+  <!-- Active Call Area -->
+  <div class="call-active-area" id="callActiveArea">
+    <div class="mic-indicator listening" id="micIndicator">
+      <div class="sound-wave" id="soundWave">
+        <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+      </div>
+      <span id="micIndicatorText">🎤 Escuchando...</span>
+    </div>
+
+    <div class="interim-text" id="interimText"></div>
+
+    <button class="btn-hangup-big" id="btnHangup" onclick="hangUp()">📵</button>
+    <div class="hangup-label">Colgar</div>
+
+    <!-- Text fallback -->
+    <div class="text-fallback">
+      <div class="text-input-row">
+        <input type="text" id="txtMsg" placeholder="Escribe si prefieres no usar el micrófono..." onkeydown="if(event.key==='Enter')sendTextMsg()" />
+        <button class="btn btn-sm btn-primary" onclick="sendTextMsg()">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Finished overlay -->
+  <div class="finished-overlay" id="finishedOverlay">
+    <div class="check">✅</div>
+    <h3>Cita agendada exitosamente</h3>
+    <p id="finishedSummary">La conversación ha finalizado.</p>
+  </div>
+
+  <!-- Transcript -->
+  <div style="margin-top:14px;">
+    <h2 style="font-size:.85rem;color:var(--accent);margin-bottom:6px;">💬 Transcripción</h2>
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <div style="text-align:center;margin-top:12px;">
+    <button class="btn-ghost" onclick="toggleDebug()">📋 Debug</button>
+    <button class="btn-ghost" onclick="newCall()">🔄 Nueva llamada</button>
+  </div>
+  <div class="debug-log" id="debugLog"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// BlindsBook Voice Test v2 — WebSocket + Azure Speech SDK
+// ═══════════════════════════════════════════════════════════════
+
+var API_BASE = 'http://localhost:4000';
+var WS_URL = 'ws://localhost:4000/ws/voice';
+
+// State
+var ws = null;
+var sessionId = null;
+var callActive = false;
+var chosenLanguage = null;
+var callStartTime = null;
+var callTimerInterval = null;
+var mediaStream = null;
+var mediaRecorder = null;
+var audioContext = null;
+var isRecording = false;
+var currentAudio = null;
+
+// ═══ CONNECTION ═══
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  
+  setConnectionStatus('connecting', 'Conectando...');
+  log('🔌 Conectando a WebSocket...', 'warn');
+  
+  ws = new WebSocket(WS_URL);
+  
+  ws.onopen = function() {
+    log('✅ WebSocket conectado', 'ok');
+    setConnectionStatus('connected', 'Conectado');
+  };
+  
+  ws.onmessage = function(event) {
+    try {
+      var msg = JSON.parse(event.data);
+      handleServerMessage(msg);
+    } catch(e) {
+      log('❌ Error parseando mensaje: ' + e.message, 'err');
+    }
+  };
+  
+  ws.onclose = function() {
+    log('🔌 WebSocket cerrado', 'warn');
+    setConnectionStatus('disconnected', 'Desconectado');
+    ws = null;
+    sessionId = null;
+  };
+  
+  ws.onerror = function(err) {
+    log('❌ Error WebSocket', 'err');
+    setConnectionStatus('disconnected', 'Error de conexión');
+  };
+}
+
+function handleServerMessage(msg) {
+  log('📨 ' + msg.type + ': ' + (msg.text ? msg.text.substring(0, 50) + '...' : ''));
+  
+  switch(msg.type) {
+    case 'state':
+      if (msg.data?.sessionId) sessionId = msg.data.sessionId;
+      if (msg.data?.listening !== undefined) {
+        setMicState(msg.data.listening ? 'listening' : 'paused');
+      }
+      if (msg.data?.speaking !== undefined) {
+        setMicState(msg.data.speaking ? 'speaking' : 'paused');
+      }
+      break;
+      
+    case 'greeting':
+      addMessage('ia', msg.text);
+      document.getElementById('btnLang1').disabled = false;
+      document.getElementById('btnLang2').disabled = false;
+      setStatusBar('idle', 'Selecciona el idioma');
+      break;
+      
+    case 'interim':
+      document.getElementById('interimText').textContent = '💬 "' + msg.text + '"';
+      break;
+      
+    case 'final':
+      document.getElementById('interimText').textContent = '';
+      addMessage('ia', msg.text);
+      updateStateDisplay(msg.state);
+      break;
+      
+    case 'audio':
+      playAudio(msg.audioBase64);
+      if (msg.text) {
+        // Audio comes with text - already added in 'final'
+      }
+      break;
+      
+    case 'finished':
+      addMessage('ia', msg.text);
+      showFinished(msg.state);
+      break;
+      
+    case 'error':
+      log('❌ ' + msg.text, 'err');
+      addMessage('system', '⚠️ ' + msg.text);
+      break;
+      
+    case 'pong':
+      break;
+  }
+}
+
+function setConnectionStatus(status, text) {
+  var el = document.getElementById('connectionStatus');
+  el.className = 'connection-status ' + status;
+  document.getElementById('connectionText').textContent = text;
+}
+
+// ═══ CALL MANAGEMENT ═══
+async function startCall() {
+  var phone = document.getElementById('customerPhone').value.trim();
+  
+  document.getElementById('btnCall').disabled = true;
+  document.getElementById('btnCall').textContent = '⏳ Conectando...';
+  
+  // Connect to WebSocket
+  connect();
+  
+  // Wait for connection
+  await waitForConnection();
+  
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    document.getElementById('btnCall').disabled = false;
+    document.getElementById('btnCall').textContent = '📞 Llamar';
+    addMessage('system', '❌ No se pudo conectar al servidor');
+    return;
+  }
+  
+  callActive = true;
+  callStartTime = Date.now();
+  callTimerInterval = setInterval(updateCallTimer, 1000);
+  document.getElementById('callTimer').className = 'call-timer active';
+  
+  // Show call screen
+  document.getElementById('callScreen').className = 'panel call-screen active';
+  document.getElementById('dialerPanel').style.display = 'none';
+  document.getElementById('transcript').innerHTML = '';
+  document.getElementById('finishedOverlay').className = 'finished-overlay';
+  
+  setStatusBar('processing', '📡 Conectando con IA...');
+  addMessage('system', '📞 Llamada iniciada');
+  
+  // Initialize session
+  ws.send(JSON.stringify({
+    type: 'init',
+    data: {
+      callerId: phone || null,
+      companyPhone: null,
+    }
+  }));
+}
+
+function waitForConnection() {
+  return new Promise(function(resolve) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
+    var attempts = 0;
+    var interval = setInterval(function() {
+      attempts++;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        clearInterval(interval);
+        resolve();
+      } else if (attempts > 30) {
+        clearInterval(interval);
+        resolve();
+      }
+    }, 100);
+  });
+}
+
+function selectLanguage(lang) {
+  chosenLanguage = lang;
+  document.getElementById('btnLang1').disabled = true;
+  document.getElementById('btnLang2').disabled = true;
+  
+  addMessage('user', lang === 'es' ? 'Español' : 'English');
+  setStatusBar('processing', '⏳ Configurando idioma...');
+  
+  // Send language selection
+  ws.send(JSON.stringify({
+    type: 'language',
+    data: { language: lang }
+  }));
+  
+  // Show active call area
+  document.getElementById('langSelector').style.display = 'none';
+  document.getElementById('callActiveArea').className = 'call-active-area visible';
+  
+  // Start recording
+  startRecording();
+}
+
+function sendTextMsg() {
+  var input = document.getElementById('txtMsg');
+  var text = input.value.trim();
+  if (!text || !ws) return;
+  
+  input.value = '';
+  addMessage('user', text);
+  setMicState('processing');
+  
+  ws.send(JSON.stringify({
+    type: 'text',
+    data: { text: text }
+  }));
+}
+
+function hangUp() {
+  callActive = false;
+  stopRecording();
+  clearInterval(callTimerInterval);
+  document.getElementById('callTimer').className = 'call-timer';
+  
+  if (ws) {
+    ws.send(JSON.stringify({ type: 'hangup' }));
+  }
+  
+  setMicState('paused');
+  setStatusBar('idle', '📵 Llamada finalizada');
+  addMessage('system', '📵 Llamada terminada');
+  document.getElementById('callActiveArea').className = 'call-active-area';
+}
+
+function newCall() {
+  callActive = false;
+  chosenLanguage = null;
+  sessionId = null;
+  stopRecording();
+  clearInterval(callTimerInterval);
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  
+  document.getElementById('callScreen').className = 'panel call-screen';
+  document.getElementById('dialerPanel').style.display = 'block';
+  document.getElementById('btnCall').disabled = false;
+  document.getElementById('btnCall').textContent = '📞 Llamar';
+  document.getElementById('langSelector').style.display = 'block';
+  document.getElementById('callActiveArea').className = 'call-active-area';
+  document.getElementById('callTimer').textContent = '00:00';
+  document.getElementById('customerPhone').value = '';
+  document.getElementById('transcript').innerHTML = '';
+}
+
+function showFinished(state) {
+  callActive = false;
+  stopRecording();
+  clearInterval(callTimerInterval);
+  document.getElementById('callTimer').className = 'call-timer';
+  
+  var summary = '';
+  if (state) {
+    if (state.customerConfirmedName) summary += '<b>Cliente:</b> ' + state.customerConfirmedName + '<br>';
+    if (state.customerId) summary += '<b>ID:</b> ' + state.customerId + '<br>';
+    if (state.type !== null && state.type !== undefined) {
+      var types = ['Cotización', 'Instalación', 'Reparación'];
+      summary += '<b>Tipo:</b> ' + types[state.type] + '<br>';
+    }
+    if (state.startDateISO) summary += '<b>Fecha:</b> ' + new Date(state.startDateISO).toLocaleString() + '<br>';
+    if (state.duration) summary += '<b>Duración:</b> ' + state.duration;
+  }
+  
+  document.getElementById('finishedSummary').innerHTML = summary || 'Conversación finalizada';
+  document.getElementById('finishedOverlay').className = 'finished-overlay visible';
+  document.getElementById('callActiveArea').className = 'call-active-area';
+  setStatusBar('idle', '✅ Cita agendada correctamente');
+}
+
+// ═══ AUDIO RECORDING (Browser → Server) ═══
+async function startRecording() {
+  if (isRecording) return;
+  
+  try {
+    log('🎤 Solicitando acceso al micrófono...', 'warn');
+    
+    mediaStream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 16000,
+        channelCount: 1,
+      }
+    });
+    
+    log('✅ Micrófono accesible', 'ok');
+    
+    // Create audio context for processing
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    var source = audioContext.createMediaStreamSource(mediaStream);
+    
+    // Create script processor to get raw PCM data
+    var processor = audioContext.createScriptProcessor(4096, 1, 1);
+    
+    processor.onaudioprocess = function(e) {
+      if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+      
+      // Get audio data as Float32Array
+      var inputData = e.inputBuffer.getChannelData(0);
+      
+      // Convert to 16-bit PCM
+      var pcmData = new Int16Array(inputData.length);
+      for (var i = 0; i < inputData.length; i++) {
+        var s = Math.max(-1, Math.min(1, inputData[i]));
+        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      
+      // Send binary audio data to server
+      ws.send(pcmData.buffer);
+    };
+    
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+    
+    isRecording = true;
+    setMicState('listening');
+    log('✅ Grabación iniciada', 'ok');
+    
+  } catch(err) {
+    log('❌ Error de micrófono: ' + err.message, 'err');
+    addMessage('system', '⚠️ No se pudo acceder al micrófono. Usa el modo texto.');
+  }
+}
+
+function stopRecording() {
+  isRecording = false;
+  
+  if (audioContext) {
+    audioContext.close().catch(function() {});
+    audioContext = null;
+  }
+  
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(function(track) { track.stop(); });
+    mediaStream = null;
+  }
+  
+  setMicState('paused');
+  log('⏹️ Grabación detenida', 'warn');
+}
+
+// ═══ AUDIO PLAYBACK (Server → Browser) ═══
+function playAudio(base64) {
+  if (!base64) return;
+  
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
+  
+  setMicState('speaking');
+  
+  var audio = new Audio('data:audio/mpeg;base64,' + base64);
+  currentAudio = audio;
+  
+  audio.onended = function() {
+    currentAudio = null;
+    if (callActive && isRecording) {
+      setMicState('listening');
+    }
+  };
+  
+  audio.onerror = function() {
+    currentAudio = null;
+    log('⚠️ Error reproduciendo audio', 'warn');
+  };
+  
+  audio.play().catch(function(err) {
+    log('⚠️ Autoplay bloqueado: ' + err.message, 'warn');
+    addMessage('system', '⚠️ Haz clic en la página para permitir audio');
+  });
+}
+
+// ═══ UI UPDATES ═══
+function setMicState(state) {
+  var el = document.getElementById('micIndicator');
+  var textEl = document.getElementById('micIndicatorText');
+  var waveEl = document.getElementById('soundWave');
+  var es = chosenLanguage !== 'en';
+  
+  el.className = 'mic-indicator ' + state;
+  
+  switch(state) {
+    case 'listening':
+      waveEl.style.display = 'inline-flex';
+      textEl.textContent = es ? '🎤 Escuchando...' : '🎤 Listening...';
+      setStatusBar('listening', es ? '🎤 Habla naturalmente' : '🎤 Speak naturally');
+      break;
+    case 'speaking':
+      waveEl.style.display = 'inline-flex';
+      textEl.textContent = es ? '🔊 Hablando...' : '🔊 Speaking...';
+      setStatusBar('speaking', es ? '🔊 Recepcionista hablando...' : '🔊 Receptionist speaking...');
+      break;
+    case 'processing':
+      waveEl.style.display = 'none';
+      textEl.textContent = es ? '⏳ Procesando...' : '⏳ Processing...';
+      setStatusBar('processing', es ? '⏳ Procesando...' : '⏳ Processing...');
+      break;
+    case 'paused':
+    default:
+      waveEl.style.display = 'none';
+      textEl.textContent = es ? '⏸ Pausado' : '⏸ Paused';
+      break;
+  }
+}
+
+function setStatusBar(cls, text) {
+  var el = document.getElementById('statusBar');
+  el.className = 'status-bar ' + cls;
+  el.textContent = text;
+}
+
+function addMessage(role, text) {
+  var div = document.createElement('div');
+  div.className = 'msg ' + role;
+  
+  if (role === 'user') {
+    div.innerHTML = '<div class="speaker">🧑 Tú</div>' + escHtml(text);
+  } else if (role === 'ia') {
+    div.innerHTML = '<div class="speaker">🤖 Recepcionista</div>' + escHtml(text);
+  } else {
+    div.innerHTML = escHtml(text);
+  }
+  
+  var container = document.getElementById('transcript');
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+function updateStateDisplay(state) {
+  // Could update a state display panel here
+}
+
+function updateCallTimer() {
+  if (!callStartTime) return;
+  var s = Math.floor((Date.now() - callStartTime) / 1000);
+  document.getElementById('callTimer').textContent = 
+    String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+}
+
+// ═══ DEBUG ═══
+function log(msg, level) {
+  level = level || 'ok';
+  console.log('[Voice v2]', msg);
+  
+  var logEl = document.getElementById('debugLog');
+  var line = document.createElement('div');
+  line.className = 'line ' + level;
+  var ts = new Date().toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  line.textContent = '[' + ts + '] ' + msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function toggleDebug() {
+  var el = document.getElementById('debugLog');
+  el.classList.toggle('visible');
+}
+
+// ═══ INIT ═══
+window.addEventListener('load', function() {
+  // Enable audio autoplay on first interaction
+  document.addEventListener('click', function() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      ctx.resume().then(function() { ctx.close(); });
+    } catch(e) {}
+  }, { once: true });
+  
+  log('🚀 Voice Test v2 cargado', 'ok');
+  
+  // Auto-connect
+  setTimeout(connect, 500);
+});
+</script>
+</body>
+</html>

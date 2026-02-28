@@ -57,6 +57,13 @@ export interface ConversationState {
   saleOrderId: number | null;
   installationContactId: number | null;
   remarks: string | null;
+  
+  // Track conversation context to avoid repetition
+  askedAboutType: boolean;
+  askedAboutDate: boolean;
+  askedAboutTime: boolean;
+  lastQuestion: string | null;
+  silenceCount: number;
 }
 
 export function createInitialState(callId: string): ConversationState {
@@ -79,5 +86,10 @@ export function createInitialState(callId: string): ConversationState {
     saleOrderId: null,
     installationContactId: null,
     remarks: null,
+    askedAboutType: false,
+    askedAboutDate: false,
+    askedAboutTime: false,
+    lastQuestion: null,
+    silenceCount: 0,
   };
 }

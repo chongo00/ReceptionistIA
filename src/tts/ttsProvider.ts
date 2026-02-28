@@ -1,6 +1,6 @@
-// Unified TTS provider. Priority: Azure Speech (primary) → null (Twilio <Say> fallback)
-// PERF: Docker Piper check commented out — using Azure only in production
-// import { isDockerTtsConfigured, synthesizeDockerMp3 } from './dockerTts.js';
+// Unified TTS provider. Priority: Azure Speech SDK (primary) → REST API fallback → null
+// Uses the new Azure Speech SDK for better streaming and natural voice
+import { isAzureTtsConfigured as isAzureSdkConfigured, synthesizeSpeech } from './azureSpeechSdkTts.js';
 import { isAzureTtsConfigured, synthesizeAzureMp3 } from './azureNeuralTts.js';
 
 type SpeechLang = 'es' | 'en';
@@ -8,30 +8,30 @@ type SpeechLang = 'es' | 'en';
 export interface TtsSynthResult {
   bytes: Buffer;
   contentType: string;
-  provider: 'docker' | 'azure';
+  provider: 'azure-sdk' | 'azure-rest' | 'docker';
 }
 
 export async function synthesizeTts(
   text: string,
   language: SpeechLang,
 ): Promise<TtsSynthResult | null> {
-  // PERF: Skip Docker Piper entirely — go straight to Azure Speech
-  // if (isDockerTtsConfigured()) {
-  //   try {
-  //     const result = await synthesizeDockerMp3(text, language);
-  //     return { ...result, provider: 'docker' };
-  //   } catch (err) {
-  //     console.warn('[TTS] Docker Piper falló, intentando Azure fallback:', (err as Error).message);
-  //   }
-  // }
+  // Try Azure Speech SDK first (better streaming, more natural)
+  if (isAzureSdkConfigured()) {
+    try {
+      const result = await synthesizeSpeech(text, language);
+      return { ...result, provider: 'azure-sdk' };
+    } catch (err) {
+      console.warn('[TTS] Azure Speech SDK falló, intentando REST fallback:', (err as Error).message);
+    }
+  }
 
+  // Fallback to Azure REST API
   if (isAzureTtsConfigured()) {
     try {
       const result = await synthesizeAzureMp3(text, language);
-      return { ...result, provider: 'azure' };
+      return { ...result, provider: 'azure-rest' };
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[TTS] Azure Speech falló:', (err as Error).message);
+      console.warn('[TTS] Azure Speech REST falló:', (err as Error).message);
     }
   }
 

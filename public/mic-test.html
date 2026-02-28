@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Test de Micrófono - Diagnóstico</title>
+<style>
+  body { font-family: system-ui; background: #1a1a2e; color: #eee; padding: 40px; max-width: 800px; margin: 0 auto; }
+  h1 { color: #4ade80; }
+  .card { background: #16213e; padding: 20px; border-radius: 12px; margin: 20px 0; }
+  .btn { background: #3b82f6; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 16px; margin: 5px; }
+  .btn:hover { background: #2563eb; }
+  .btn.recording { background: #ef4444; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+  .log { background: #0f0f23; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+  .log .ok { color: #4ade80; }
+  .log .warn { color: #fbbf24; }
+  .log .err { color: #f87171; }
+  .meter { height: 20px; background: #333; border-radius: 10px; overflow: hidden; margin: 10px 0; }
+  .meter-bar { height: 100%; background: linear-gradient(90deg, #4ade80, #22c55e); width: 0%; transition: width 0.1s; }
+  select { background: #1e3a5f; color: white; border: 1px solid #3b82f6; padding: 10px; border-radius: 8px; font-size: 14px; width: 100%; }
+  #transcript { min-height: 60px; background: #0d1220; padding: 15px; border-radius: 8px; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<h1>🎤 Diagnóstico de Micrófono</h1>
+
+<div class="card">
+  <h3>1. Selecciona tu micrófono</h3>
+  <select id="micSelect"><option value="">Cargando dispositivos...</option></select>
+  <button class="btn" onclick="refreshDevices()" style="margin-top:10px">🔄 Actualizar lista</button>
+</div>
+
+<div class="card">
+  <h3>2. Prueba de captura de audio (MediaStream)</h3>
+  <p>Esta prueba verifica si el navegador puede acceder al micrófono.</p>
+  <button class="btn" id="btnCapture" onclick="testCapture()">🎤 Probar captura de audio</button>
+  <div class="meter"><div class="meter-bar" id="levelBar"></div></div>
+  <p id="captureStatus">Haz clic para probar</p>
+</div>
+
+<div class="card">
+  <h3>3. Prueba de reconocimiento de voz (Web Speech API)</h3>
+  <p>Esta prueba verifica si el reconocimiento de voz funciona.</p>
+  <button class="btn" id="btnSpeech" onclick="testSpeech()">🗣️ Probar reconocimiento de voz</button>
+  <p id="speechStatus">Haz clic para probar</p>
+  <div id="transcript"></div>
+</div>
+
+<div class="card">
+  <h3>📋 Log de diagnóstico</h3>
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+var audioCtx, analyser, stream, recognition;
+
+function log(msg, level) {
+  level = level || 'ok';
+  var el = document.getElementById('log');
+  var ts = new Date().toLocaleTimeString();
+  el.innerHTML += '<span class="' + level + '">[' + ts + '] ' + msg + '</span>\n';
+  el.scrollTop = el.scrollHeight;
+  console.log('[' + level.toUpperCase() + ']', msg);
+}
+
+async function refreshDevices() {
+  var select = document.getElementById('micSelect');
+  select.innerHTML = '<option value="">⏳ Solicitando permiso...</option>';
+  
+  log('Verificando soporte de MediaDevices...', 'warn');
+  
+  if (!navigator.mediaDevices) {
+    log('❌ navigator.mediaDevices NO está disponible', 'err');
+    log('→ Esto puede ser porque:', 'warn');
+    log('  1. No estás en HTTPS o localhost', 'warn');
+    log('  2. El navegador es muy antiguo', 'warn');
+    select.innerHTML = '<option value="">❌ MediaDevices no disponible</option>';
+    return;
+  }
+  
+  if (!navigator.mediaDevices.getUserMedia) {
+    log('❌ getUserMedia NO está disponible', 'err');
+    select.innerHTML = '<option value="">❌ getUserMedia no disponible</option>';
+    return;
+  }
+  
+  log('✅ MediaDevices API disponible', 'ok');
+  log('Solicitando permiso de micrófono...', 'warn');
+  
+  try {
+    // Need to request permission first to get labels
+    var tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log('✅ Permiso de micrófono concedido', 'ok');
+    tempStream.getTracks().forEach(t => t.stop());
+    
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    var mics = devices.filter(d => d.kind === 'audioinput');
+    
+    select.innerHTML = '<option value="">-- Selecciona un micrófono --</option>';
+    
+    mics.forEach((mic, i) => {
+      var opt = document.createElement('option');
+      opt.value = mic.deviceId;
+      opt.textContent = mic.label || ('Micrófono ' + (i + 1));
+      select.appendChild(opt);
+      log('  📍 ' + (mic.label || mic.deviceId.substring(0,20) + '...'), 'ok');
+    });
+    
+    log('✅ ' + mics.length + ' micrófonos encontrados', 'ok');
+    
+    if (mics.length === 0) {
+      log('⚠️ No se encontraron micrófonos. ¿Tienes uno conectado?', 'warn');
+      select.innerHTML = '<option value="">⚠️ No hay micrófonos</option>';
+    }
+  } catch(err) {
+    log('❌ Error: ' + err.name + ' - ' + err.message, 'err');
+    select.innerHTML = '<option value="">❌ Error: ' + err.message + '</option>';
+    
+    if (err.name === 'NotAllowedError') {
+      log('→ PERMISO DENEGADO. Haz clic en el icono 🔒 en la barra de URL → Micrófono → Permitir', 'warn');
+      log('→ Luego recarga la página (F5)', 'warn');
+    } else if (err.name === 'NotFoundError') {
+      log('→ No se encontró ningún micrófono conectado', 'warn');
+    } else if (err.name === 'NotReadableError' || err.name === 'AbortError') {
+      log('→ El micrófono está siendo usado por otra aplicación', 'err');
+      log('→ Cierra Discord, Teams, Zoom, WhatsApp, etc.', 'warn');
+    }
+  }
+}
+
+async function testCapture() {
+  var btn = document.getElementById('btnCapture');
+  var status = document.getElementById('captureStatus');
+  var deviceId = document.getElementById('micSelect').value;
+  
+  // Stop previous
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+  if (audioCtx) {
+    audioCtx.close();
+    audioCtx = null;
+  }
+  
+  btn.textContent = '⏳ Conectando...';
+  status.textContent = 'Solicitando acceso al micrófono...';
+  log('Solicitando acceso al micrófono' + (deviceId ? ' (ID: ' + deviceId.substring(0,15) + '...)' : ' (default)'), 'warn');
+  
+  try {
+    var constraints = { audio: deviceId ? { deviceId: { exact: deviceId } } : true };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    
+    var track = stream.getAudioTracks()[0];
+    log('✅ Micrófono conectado: ' + track.label, 'ok');
+    log('  Settings: ' + JSON.stringify(track.getSettings()), 'ok');
+    
+    // Setup analyser
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    var source = audioCtx.createMediaStreamSource(stream);
+    source.connect(analyser);
+    analyser.fftSize = 256;
+    
+    btn.className = 'btn recording';
+    btn.textContent = '🔴 Grabando... (habla ahora)';
+    status.textContent = '✅ Micrófono activo - habla y observa el medidor';
+    
+    // Update level meter
+    var dataArray = new Uint8Array(analyser.frequencyBinCount);
+    var maxLevel = 0;
+    
+    function updateMeter() {
+      if (!stream) return;
+      analyser.getByteFrequencyData(dataArray);
+      var sum = 0;
+      for (var i = 0; i < dataArray.length; i++) sum += dataArray[i];
+      var avg = sum / dataArray.length;
+      var pct = Math.min(100, avg * 2);
+      document.getElementById('levelBar').style.width = pct + '%';
+      if (avg > maxLevel) maxLevel = avg;
+      if (avg > 5) {
+        log('🔊 Audio detectado! Nivel: ' + avg.toFixed(1), 'ok');
+      }
+      requestAnimationFrame(updateMeter);
+    }
+    updateMeter();
+    
+    // Auto-stop after 10 seconds
+    setTimeout(() => {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        btn.className = 'btn';
+        btn.textContent = '🎤 Probar captura de audio';
+        status.textContent = 'Prueba terminada. Nivel máximo: ' + maxLevel.toFixed(1);
+        log('Prueba de captura terminada. Nivel máximo: ' + maxLevel.toFixed(1), maxLevel > 5 ? 'ok' : 'warn');
+        if (maxLevel < 5) {
+          log('⚠️ El nivel de audio es muy bajo. Verifica que el micrófono correcto está seleccionado.', 'warn');
+        }
+      }
+    }, 10000);
+    
+  } catch(err) {
+    log('❌ Error de captura: ' + err.name + ' - ' + err.message, 'err');
+    btn.className = 'btn';
+    btn.textContent = '🎤 Probar captura de audio';
+    status.textContent = '❌ Error: ' + err.message;
+    
+    if (err.name === 'NotAllowedError') {
+      log('→ El navegador bloqueó el acceso. Haz clic en el icono de candado 🔒 en la barra de URL', 'warn');
+    } else if (err.name === 'NotReadableError' || err.name === 'AbortError') {
+      log('→ El micrófono está siendo usado por otra aplicación', 'err');
+      log('→ Cierra Discord, Teams, Zoom, o cualquier app de videollamada', 'warn');
+    } else if (err.name === 'NotFoundError') {
+      log('→ No se encontró el micrófono seleccionado', 'err');
+    }
+  }
+}
+
+function testSpeech() {
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    log('❌ Web Speech API no soportada en este navegador', 'err');
+    document.getElementById('speechStatus').textContent = '❌ Navegador no soportado';
+    return;
+  }
+  
+  var btn = document.getElementById('btnSpeech');
+  var status = document.getElementById('speechStatus');
+  var transcript = document.getElementById('transcript');
+  
+  // Stop previous
+  if (recognition) {
+    try { recognition.abort(); } catch(e) {}
+  }
+  
+  recognition = new SpeechRecognition();
+  recognition.lang = 'es-ES';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  recognition.maxAlternatives = 1;
+  
+  log('Iniciando reconocimiento de voz (es-ES)...', 'warn');
+  btn.className = 'btn recording';
+  btn.textContent = '🔴 Escuchando...';
+  status.textContent = 'Di algo claramente...';
+  transcript.innerHTML = '<em>Esperando voz...</em>';
+  
+  recognition.onstart = function() {
+    log('✅ Reconocimiento iniciado', 'ok');
+  };
+  
+  recognition.onaudiostart = function() {
+    log('🔊 Audio capturado (onaudiostart)', 'ok');
+  };
+  
+  recognition.onsoundstart = function() {
+    log('🎵 Sonido detectado (onsoundstart)', 'ok');
+  };
+  
+  recognition.onspeechstart = function() {
+    log('🗣️ ¡VOZ DETECTADA! (onspeechstart)', 'ok');
+  };
+  
+  recognition.onresult = function(event) {
+    var text = '';
+    for (var i = 0; i < event.results.length; i++) {
+      text += event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        log('✅ Texto final: "' + event.results[i][0].transcript + '" (confianza: ' + (event.results[i][0].confidence * 100).toFixed(0) + '%)', 'ok');
+      }
+    }
+    transcript.innerHTML = '💬 "' + text + '"';
+  };
+  
+  recognition.onerror = function(event) {
+    log('❌ Error: ' + event.error, 'err');
+    status.textContent = '❌ Error: ' + event.error;
+    btn.className = 'btn';
+    btn.textContent = '🗣️ Probar reconocimiento de voz';
+    
+    if (event.error === 'audio-capture') {
+      log('→ No se puede capturar audio del micrófono', 'err');
+      log('→ SOLUCIÓN: Primero prueba la "Captura de audio" arriba para verificar que el mic funciona', 'warn');
+    } else if (event.error === 'no-speech') {
+      log('→ No se detectó voz. Habla más fuerte o acércate al micrófono', 'warn');
+    } else if (event.error === 'network') {
+      log('→ Error de red. Edge/Chrome necesitan internet para el reconocimiento de voz', 'err');
+    } else if (event.error === 'not-allowed') {
+      log('→ Permiso denegado. Clic en 🔒 → Micrófono → Permitir', 'warn');
+    }
+  };
+  
+  recognition.onend = function() {
+    log('Reconocimiento terminado', 'warn');
+    btn.className = 'btn';
+    btn.textContent = '🗣️ Probar reconocimiento de voz';
+  };
+  
+  try {
+    recognition.start();
+  } catch(e) {
+    log('❌ No se pudo iniciar: ' + e.message, 'err');
+  }
+}
+
+// Init
+window.onload = function() {
+  log('Página de diagnóstico cargada', 'ok');
+  log('Navegador: ' + navigator.userAgent.split(' ').slice(-2).join(' '), 'ok');
+  log('Contexto seguro: ' + (window.isSecureContext ? 'Sí ✅' : 'No ❌'), window.isSecureContext ? 'ok' : 'err');
+  refreshDevices();
+};
+</script>
+</body>
+</html>

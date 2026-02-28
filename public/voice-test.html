@@ -104,6 +104,15 @@
   .btn-primary { background:var(--accent); color:#fff; }
   .btn-primary:hover { background:#2563eb; }
 
+  /* Debug panel */
+  .debug-panel { background:#0d1220; border:1px solid var(--border); border-radius:8px; padding:8px 12px; margin-top:8px; font-size:.72rem; font-family:monospace; max-height:120px; overflow-y:auto; }
+  .debug-panel .dbg-line { padding:1px 0; color:var(--mute); border-bottom:1px solid #1a2440; }
+  .debug-panel .dbg-line.ok { color:#4ade80; }
+  .debug-panel .dbg-line.warn { color:#fbbf24; }
+  .debug-panel .dbg-line.err { color:#f87171; }
+  .mic-test-btn { background:#1a2440; border:1px solid var(--border); color:var(--accent); padding:6px 14px; border-radius:8px; font-size:.75rem; cursor:pointer; margin-top:6px; }
+  .mic-test-btn:hover { border-color:var(--accent); background:#1e3a5f; }
+
   .transcript { max-height:380px; overflow-y:auto; padding:6px 0; min-height:60px; }
   .transcript::-webkit-scrollbar { width:4px; }
   .transcript::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
@@ -244,6 +253,12 @@
         </div>
       </div>
     </div>
+
+    <!-- Mic diagnostics -->
+    <div style="text-align:center; margin-top:8px;">
+      <button class="mic-test-btn" onclick="testMicrophone()">🔍 Diagnosticar micrófono</button>
+    </div>
+    <div class="debug-panel" id="debugPanel" style="display:none;"></div>
   </div>
 
   <!-- Finished overlay -->
@@ -302,13 +317,163 @@ var conversationFinished = false;
 var accumulatedFinal = '';    // final recognized segments
 var interimBuffer = '';       // current interim text
 var silenceTimer = null;      // fires after silence to auto-send
-var SILENCE_DELAY = 1800;    // ms of silence before auto-sending
+var SILENCE_DELAY = 2200;    // ms of silence before auto-sending (increased for network latency)
+var NETWORK_RETRY_DELAY = 500; // ms to wait before retrying after network error
 var hasSpeechThisTurn = false;
 
 var speechRetryCount = 0;
 var MAX_SPEECH_RETRIES = 3;
+var consecutiveErrors = 0;
+var MAX_CONSECUTIVE_ERRORS = 5;
+var noAudioTimeout = null;
+var NO_AUDIO_TIMEOUT_MS = 8000; // 8s without any audio = problem
 
 var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+// ═══ DEBUG LOG ═══
+function debugLog(msg, level) {
+  level = level || 'ok';
+  var panel = document.getElementById('debugPanel');
+  if (!panel) return;
+  panel.style.display = 'block';
+  var line = document.createElement('div');
+  line.className = 'dbg-line ' + level;
+  var ts = new Date().toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  line.textContent = '[' + ts + '] ' + msg;
+  panel.appendChild(line);
+  panel.scrollTop = panel.scrollHeight;
+  console.log('[MIC-DEBUG]', msg);
+}
+
+// ═══ MIC TEST ═══
+async function testMicrophone() {
+  var panel = document.getElementById('debugPanel');
+  panel.style.display = 'block';
+  panel.innerHTML = '';
+
+  // 1. Check secure context
+  if (window.isSecureContext) {
+    debugLog('✅ Contexto seguro (HTTPS o localhost)', 'ok');
+  } else {
+    debugLog('❌ NO es contexto seguro — el micrófono NO funcionará. Usa http://localhost:4000', 'err');
+    return;
+  }
+
+  // 2. Check Web Speech API
+  if (SpeechRecognition) {
+    debugLog('✅ Web Speech API disponible', 'ok');
+  } else {
+    debugLog('❌ Web Speech API NO disponible — usa Chrome o Edge (no Firefox)', 'err');
+    return;
+  }
+
+  // 3. Check navigator.mediaDevices
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    debugLog('✅ MediaDevices API disponible', 'ok');
+  } else {
+    debugLog('❌ MediaDevices API no disponible — verifica HTTPS/localhost', 'err');
+    return;
+  }
+
+  // 4. Request mic permission
+  debugLog('🎤 Solicitando permiso de micrófono...', 'warn');
+  try {
+    var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    var tracks = stream.getAudioTracks();
+    debugLog('✅ Micrófono permitido: ' + tracks[0].label, 'ok');
+
+    // 5. Check if mic has audio (quick level test)
+    debugLog('🔊 Verificando nivel de audio... habla algo', 'warn');
+    var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    var analyser = audioCtx.createAnalyser();
+    var source = audioCtx.createMediaStreamSource(stream);
+    source.connect(analyser);
+    analyser.fftSize = 256;
+    var dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    var maxLevel = 0;
+    var checks = 0;
+    var levelTestInterval = setInterval(function() {
+      analyser.getByteFrequencyData(dataArray);
+      var avg = 0;
+      for (var i = 0; i < dataArray.length; i++) avg += dataArray[i];
+      avg = avg / dataArray.length;
+      if (avg > maxLevel) maxLevel = avg;
+      checks++;
+      if (checks >= 30) { // ~3 seconds
+        clearInterval(levelTestInterval);
+        stream.getTracks().forEach(function(t) { t.stop(); });
+        audioCtx.close();
+        if (maxLevel > 5) {
+          debugLog('✅ Audio detectado — nivel máx: ' + maxLevel.toFixed(1), 'ok');
+        } else {
+          debugLog('⚠️ Nivel de audio MUY BAJO (' + maxLevel.toFixed(1) + ') — ¿está el micrófono silenciado?', 'warn');
+        }
+
+        // 6. Quick Speech Recognition test
+        debugLog('🗣️ Probando reconocimiento de voz... di algo', 'warn');
+        testSpeechRecognition();
+      }
+    }, 100);
+
+  } catch(err) {
+    debugLog('❌ Permiso de micrófono DENEGADO: ' + err.message, 'err');
+    debugLog('→ Haz clic en el ícono de candado 🔒 en la barra de URL → Micrófono → Permitir', 'warn');
+  }
+}
+
+function testSpeechRecognition() {
+  var testRec = new SpeechRecognition();
+  testRec.lang = 'es-ES';
+  testRec.interimResults = true;
+  testRec.continuous = false;
+  testRec.maxAlternatives = 1;
+
+  var gotResult = false;
+  var testTimeout = setTimeout(function() {
+    if (!gotResult) {
+      debugLog('⚠️ Sin resultado en 5s — puede ser problema de red (Chrome usa servidores de Google)', 'warn');
+      debugLog('→ Verifica tu conexión a internet', 'warn');
+      try { testRec.stop(); } catch(e) {}
+    }
+  }, 5000);
+
+  testRec.onresult = function(event) {
+    gotResult = true;
+    clearTimeout(testTimeout);
+    var text = event.results[0][0].transcript;
+    debugLog('✅ ¡Voz reconocida! "' + text + '" (confianza: ' + (event.results[0][0].confidence * 100).toFixed(0) + '%)', 'ok');
+    debugLog('✅ TODO FUNCIONA — el micrófono y el reconocimiento están OK', 'ok');
+    try { testRec.stop(); } catch(e) {}
+  };
+
+  testRec.onerror = function(event) {
+    clearTimeout(testTimeout);
+    if (event.error === 'no-speech') {
+      debugLog('⚠️ No se detectó voz — habla más fuerte o acércate al micrófono', 'warn');
+    } else if (event.error === 'not-allowed') {
+      debugLog('❌ Permiso de micrófono denegado para reconocimiento de voz', 'err');
+    } else if (event.error === 'network') {
+      debugLog('❌ Error de red — Chrome necesita internet para reconocimiento de voz', 'err');
+    } else {
+      debugLog('❌ Error de reconocimiento: ' + event.error, 'err');
+    }
+  };
+
+  testRec.onend = function() {
+    clearTimeout(testTimeout);
+    if (!gotResult) {
+      debugLog('⚠️ Reconocimiento terminó sin resultado. Intenta hablar más claro o fuerte.', 'warn');
+    }
+  };
+
+  try {
+    testRec.start();
+    debugLog('🎙️ Reconocimiento iniciado — tienes 5 segundos para hablar...', 'ok');
+  } catch(e) {
+    debugLog('❌ No se pudo iniciar reconocimiento: ' + e.message, 'err');
+  }
+}
 
 // ═══ SETTINGS ═══
 function toggleSettings() {
@@ -381,6 +546,58 @@ function setDialerStatus(cls, text) {
   el.textContent = text;
 }
 
+// ═══ MIC PRE-CHECK ═══
+async function checkMicrophoneAccess() {
+  debugLog('🔍 Verificando acceso al micrófono antes de iniciar...', 'warn');
+  document.getElementById('debugPanel').style.display = 'block';
+
+  // Check secure context
+  if (!window.isSecureContext) {
+    debugLog('❌ NO es contexto seguro — usa http://localhost:4000', 'err');
+    return false;
+  }
+
+  // Enumerate devices to see if there's a mic at all
+  try {
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    var mics = devices.filter(function(d) { return d.kind === 'audioinput'; });
+    if (mics.length === 0) {
+      debugLog('❌ Windows no reporta NINGÚN micrófono conectado al PC', 'err');
+      debugLog('→ Conecta un micrófono o auriculares con mic y recarga la página', 'warn');
+      return false;
+    }
+    debugLog('🎤 Micrófonos detectados (' + mics.length + '):', 'ok');
+    mics.forEach(function(m, i) {
+      debugLog('   ' + (i+1) + '. ' + (m.label || '(sin nombre — ¿permiso pendiente?)'), 'ok');
+    });
+  } catch(e) {
+    debugLog('⚠️ No se pudo enumerar dispositivos: ' + e.message, 'warn');
+  }
+
+  // Try to actually open the mic
+  try {
+    var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    var trackLabel = stream.getAudioTracks()[0].label;
+    debugLog('✅ Micrófono accesible: ' + trackLabel, 'ok');
+    // Release the mic immediately so Speech Recognition can use it
+    stream.getTracks().forEach(function(t) { t.stop(); });
+    return true;
+  } catch(err) {
+    debugLog('❌ No se puede acceder al micrófono: ' + err.name + ' — ' + err.message, 'err');
+    if (err.name === 'NotAllowedError') {
+      debugLog('→ Permiso denegado. Clic en 🔒 barra de URL → Micrófono → Permitir → Recargar', 'warn');
+    } else if (err.name === 'NotFoundError') {
+      debugLog('→ No se encontró micrófono. ¿Está conectado? ¿Lo usa otra app (Discord, Zoom, Teams)?', 'warn');
+    } else if (err.name === 'NotReadableError' || err.name === 'AbortError') {
+      debugLog('→ El micrófono está ocupado por otra aplicación.', 'err');
+      debugLog('→ CIERRA Discord, Zoom, Teams, OBS u otra app que use el mic, luego recarga.', 'warn');
+    } else {
+      debugLog('→ Error inesperado. Verifica el micrófono en Configuración de Windows → Sonido → Entrada', 'warn');
+    }
+    return false;
+  }
+}
+
 // ═══ CALL SESSION ═══
 async function startCallSession() {
   callId = 'call-' + Date.now();
@@ -389,6 +606,7 @@ async function startCallSession() {
   chosenLanguage = null;
   accumulatedFinal = '';
   interimBuffer = '';
+  consecutiveErrors = 0;
 
   document.getElementById('callScreen').className = 'panel call-screen active';
   document.getElementById('btnCall').style.display = 'none';
@@ -407,10 +625,22 @@ async function startCallSession() {
   callTimerInterval = setInterval(updateCallTimer, 1000);
   document.getElementById('callTimer').className = 'call-timer active';
 
-  setStatusBar('ringing', '📡 Conectando con BlindsBook IA...');
-  addMessage('system', '📞 Llamada iniciada...');
+  setStatusBar('ringing', '📡 Verificando micrófono...');
+  addMessage('system', '📞 Iniciando llamada...');
 
-  await sleep(1000);
+  // Pre-check microphone before starting the call
+  var micOk = await checkMicrophoneAccess();
+  if (!micOk) {
+    setStatusBar('error', '⚠️ Micrófono no disponible — usa ⌨️ modo texto');
+    addMessage('system', '⚠️ No se pudo acceder al micrófono. Puedes usar el modo texto (⌨️) para continuar la conversación.');
+    document.getElementById('textFallbackBody').style.display = 'block';
+    // Still continue the call — just without mic. User can type.
+  } else {
+    debugLog('✅ Micrófono listo — iniciando llamada', 'ok');
+  }
+
+  setStatusBar('ringing', '📡 Conectando con BlindsBook IA...');
+  await sleep(500);
 
   try {
     var result = await sendToServer(null);
@@ -433,6 +663,7 @@ async function selectLanguage(choice) {
 
   chosenLanguage = choice === '1' ? 'es' : 'en';
   addMessage('user', choice === '1' ? 'Español (1)' : 'English (2)');
+  debugLog('🌐 Idioma seleccionado: ' + chosenLanguage, 'ok');
 
   var result = await sendToServer(choice);
 
@@ -440,14 +671,21 @@ async function selectLanguage(choice) {
   document.getElementById('langSelector').style.display = 'none';
   document.getElementById('callActiveArea').className = 'call-active-area visible';
   document.getElementById('textFallback').className = 'text-fallback visible';
-
-  // After IA finishes speaking, mic opens automatically (handled in sendToServer)
+  debugLog('📞 Área de llamada activa — mic debería abrirse', 'ok');
 }
 
 // ═══ REAL-TIME MICROPHONE (auto-listen, auto-send on silence) ═══
-function startListening() {
-  if (!SpeechRecognition || !callActive || conversationFinished || isProcessing || isPlaying) return;
+var isStartingRecognition = false; // Prevent multiple simultaneous starts
 
+function startListening() {
+  if (!SpeechRecognition) { debugLog('❌ SpeechRecognition no disponible', 'err'); return; }
+  if (!callActive) { debugLog('⚠️ startListening: llamada no activa', 'warn'); return; }
+  if (conversationFinished) { debugLog('⚠️ startListening: conversación terminada', 'warn'); return; }
+  if (isProcessing) { debugLog('⚠️ startListening: aún procesando respuesta', 'warn'); return; }
+  if (isPlaying) { debugLog('⚠️ startListening: audio aún reproduciéndose', 'warn'); return; }
+  if (isStartingRecognition) { debugLog('⚠️ startListening: ya iniciando...', 'warn'); return; }
+
+  isStartingRecognition = true;
   micActive = true;
   accumulatedFinal = '';
   interimBuffer = '';
@@ -455,15 +693,38 @@ function startListening() {
   clearTimeout(silenceTimer);
   setMicIndicator('listening');
   document.getElementById('interimText').textContent = '';
+  
+  var langCode = chosenLanguage === 'en' ? 'en-US' : 'es-ES';
 
-  recognition = new SpeechRecognition();
-  recognition.lang = chosenLanguage === 'en' ? 'en-US' : 'es-ES';
-  recognition.interimResults = true;
-  recognition.continuous = true;
-  recognition.maxAlternatives = 1;
+  // Clean up previous recognition instance and wait before creating new one
+  if (recognition) {
+    try { 
+      recognition.onend = null; // Remove handler to prevent restart loop
+      recognition.onerror = null;
+      recognition.abort(); 
+    } catch(e) {}
+    recognition = null;
+  }
+
+  // Small delay to ensure previous recognition is fully stopped
+  setTimeout(function() {
+    if (!callActive || conversationFinished || isProcessing || isPlaying) {
+      isStartingRecognition = false;
+      return;
+    }
+    
+    debugLog('🎤 Iniciando reconocimiento — lang=' + langCode, 'ok');
+    
+    recognition = new SpeechRecognition();
+    recognition.lang = langCode;
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.maxAlternatives = 1;
 
   recognition.onresult = function(event) {
     if (!micActive) return;
+    consecutiveErrors = 0; // Mic is working — reset error counter
+    clearTimeout(noAudioTimeout); // Cancel the "no audio" warning
 
     var finalText = '';
     var interimText = '';
@@ -483,6 +744,7 @@ function startListening() {
       hasSpeechThisTurn = true;
       document.getElementById('interimText').textContent = '💬 "' + display + '"';
       setMicIndicator('listening');
+      debugLog('💬 Voz: "' + display + '"', 'ok');
 
       // Reset silence timer — will fire after SILENCE_DELAY ms of no new results
       clearTimeout(silenceTimer);
@@ -494,6 +756,7 @@ function startListening() {
 
   recognition.onerror = function(event) {
     console.warn('Speech error:', event.error);
+    debugLog('⚠️ Speech error: ' + event.error, event.error === 'no-speech' ? 'warn' : 'err');
     if (event.error === 'no-speech') {
       // Just keep listening silently
       if (micActive) {
@@ -503,43 +766,106 @@ function startListening() {
       micActive = false;
       setMicIndicator('paused');
       setStatusBar('error', '⚠️ Permiso de micrófono denegado. Permite el acceso y recarga.');
+      addMessage('system', '⚠️ Micrófono bloqueado. Haz clic en 🔒 en la barra de URL → Micrófono → Permitir, luego recarga.');
     } else if (event.error === 'network') {
-      if (speechRetryCount < MAX_SPEECH_RETRIES && micActive) {
+      debugLog('⚠️ Error de red — reintentando...', 'warn');
+      // Network errors are common with Web Speech API - retry silently
+      if (speechRetryCount < MAX_SPEECH_RETRIES && micActive && callActive) {
         speechRetryCount++;
-        setTimeout(function() { if (micActive && callActive) startListening(); }, 800);
+        debugLog('🔄 Reintento automático (' + speechRetryCount + '/' + MAX_SPEECH_RETRIES + ')', 'warn');
+        setTimeout(function() { 
+          if (micActive && callActive && !isProcessing && !isPlaying) {
+            startListening(); 
+          }
+        }, NETWORK_RETRY_DELAY);
         return;
       }
-      micActive = false;
-      setMicIndicator('paused');
-      setStatusBar('error', '⚠️ Error de red en reconocimiento. Usa el modo texto.');
+      // After max retries, keep trying but show message
+      debugLog('⚠️ Conexión inestable — continuando con reintentos', 'warn');
+      speechRetryCount = 0; // Reset for next batch of retries
+      setTimeout(function() { 
+        if (micActive && callActive && !isProcessing && !isPlaying) {
+          startListening(); 
+        }
+      }, 1000);
+    } else if (event.error === 'audio-capture') {
+      consecutiveErrors++;
+      debugLog('❌ audio-capture error #' + consecutiveErrors + ' — no se puede acceder al micrófono', 'err');
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        micActive = false;
+        setMicIndicator('paused');
+        setStatusBar('error', '⚠️ No se detecta micrófono. Verifica que está conectado y no lo usa otra app.');
+        addMessage('system', '🎤 Error de captura de audio. Posibles causas:\n• No hay micrófono conectado al PC\n• Otra app (Zoom, Teams, Discord) está usando el mic\n• El micrófono está deshabilitado en Windows (Panel de Control → Sonido → Grabar)\n• Chrome no tiene acceso al micrófono en Windows (Configuración → Privacidad → Micrófono)\n\nSolución: cierra otras apps que usen el mic, verifica en Configuración de Windows, y recarga la página.\n\nMientras tanto, usa ⌨️ modo texto abajo.');
+        document.getElementById('textFallbackBody').style.display = 'block';
+        return;
+      }
     } else if (event.error === 'aborted') {
-      // Normal stop
+      // Aborted is normal when stopping/restarting - don't log or count as error
+      isStartingRecognition = false;
     }
   };
 
   recognition.onend = function() {
-    // Browser auto-stops recognition — restart if call still active
+    isStartingRecognition = false;
+    
+    // Prevent infinite restart if errors keep happening
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      debugLog('🛑 Demasiados errores — usa modo texto', 'err');
+      micActive = false;
+      setMicIndicator('paused');
+      document.getElementById('textFallbackBody').style.display = 'block';
+      return;
+    }
+    
+    // Only restart if call is still active and we should be listening
     if (micActive && callActive && !conversationFinished && !isProcessing && !isPlaying) {
+      // Longer delay to prevent rapid restart loop
+      var delay = Math.max(500, 300 * (consecutiveErrors + 1));
+      debugLog('🔄 Reiniciando en ' + delay + 'ms...', 'warn');
       setTimeout(function() {
-        if (micActive && callActive) startListening();
-      }, 150);
+        if (micActive && callActive && !isProcessing && !isPlaying && !isStartingRecognition) {
+          startListening();
+        }
+      }, delay);
     }
   };
+  
+  // Only log important events to reduce noise
+  recognition.onspeechstart = function() {
+    debugLog('🗣️ ¡VOZ detectada!', 'ok');
+    consecutiveErrors = 0; // Voice detected = working
+  };
 
-  try {
-    recognition.start();
-    speechRetryCount = 0;
-  } catch(e) {
-    if (e.message && e.message.indexOf('already started') === -1) {
-      console.warn('Mic start error:', e);
-      setStatusBar('error', 'Error micrófono: ' + e.message);
+    try {
+      recognition.start();
+      speechRetryCount = 0;
+      isStartingRecognition = false;
+      debugLog('✅ Escuchando...', 'ok');
+      
+      // Start a "no audio" timeout to detect if mic isn't working
+      clearTimeout(noAudioTimeout);
+      noAudioTimeout = setTimeout(function() {
+        if (micActive && !hasSpeechThisTurn && callActive && !isProcessing && !isPlaying) {
+          debugLog('⚠️ Sin voz detectada — usa modo texto si hay problemas', 'warn');
+          document.getElementById('textFallbackBody').style.display = 'block';
+        }
+      }, NO_AUDIO_TIMEOUT_MS);
+      
+    } catch(e) {
+      isStartingRecognition = false;
+      if (e.message && e.message.indexOf('already started') === -1) {
+        console.warn('Mic start error:', e);
+        debugLog('❌ Error: ' + e.message, 'err');
+        consecutiveErrors++;
+      }
     }
-  }
+  }, 100); // 100ms delay before starting new recognition
 }
 
 function stopListening() {
   micActive = false;
   clearTimeout(silenceTimer);
+  clearTimeout(noAudioTimeout);
   if (recognition) {
     try { recognition.stop(); } catch(e) {}
     recognition = null;
@@ -640,8 +966,10 @@ async function sendToServer(text) {
     if (data.audioBase64) {
       isPlaying = true;
       setMicIndicator('speaking');
+      debugLog('🔊 Reproduciendo audio TTS (' + Math.round(data.audioBase64.length/1024) + ' KB)...', 'ok');
       await playAudioBase64(data.audioBase64);
       isPlaying = false;
+      debugLog('🔊 Audio terminado — isPlaying=false', 'ok');
     }
 
     isProcessing = false;
@@ -662,7 +990,10 @@ async function sendToServer(text) {
 
     // Auto-resume listening after IA speaks (if call active and language chosen)
     if (callActive && chosenLanguage && !conversationFinished) {
+      debugLog('→ Llamando startListening() — callActive=' + callActive + ' lang=' + chosenLanguage, 'ok');
       startListening();
+    } else {
+      debugLog('⚠️ NO se llama startListening — callActive=' + callActive + ' lang=' + chosenLanguage + ' finished=' + conversationFinished, 'warn');
     }
 
     return data;
@@ -837,6 +1168,11 @@ window.addEventListener('load', function() {
   document.getElementById('customerPhone').focus();
   if (!SpeechRecognition) {
     console.warn('Web Speech API not supported — voice mode unavailable');
+    addMessage('system', '⚠️ Tu navegador NO soporta reconocimiento de voz. Usa Chrome o Edge.');
+  }
+  // Show initial mic capability
+  if (!window.isSecureContext) {
+    addMessage('system', '⚠️ Página sin contexto seguro — el micrófono no funcionará. Usa http://localhost:4000');
   }
   // Unlock audio on first click
   document.addEventListener('click', function() {

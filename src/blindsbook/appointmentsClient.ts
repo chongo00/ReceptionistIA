@@ -8,7 +8,7 @@ const env = loadEnv();
 
 const api = axios.create({
   baseURL: `${env.blindsbookApiBaseUrl.replace(/\/$/, '')}/api`,
-  timeout: 10_000,
+  timeout: 30_000, // Increased timeout for slow API responses
 });
 
 const tokenManager = new TokenManager(env.blindsbookApiBaseUrl);
@@ -145,6 +145,10 @@ function setCachedSearch(term: string, results: CustomerMatch[]): void {
   });
 }
 
+/**
+ * Customer search - tries the optimized /quick-search endpoint first,
+ * falls back to the standard /customers endpoint if needed.
+ */
 export async function findCustomersBySearch(
   search: string,
   pageSize = 5,
@@ -159,18 +163,66 @@ export async function findCustomersBySearch(
     return cached;
   }
 
-  const token = await getBearerToken();
-  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-  const response = await api.get<CustomersListResponse>('/customers', {
-    params: { search: term, page: 1, pageSize },
-    headers,
-  });
+  const startTime = Date.now();
+  console.log(`[API] Starting customer search: "${term}"`);
 
-  const raw = response.data?.data?.customers ?? response.data?.data?.data ?? [];
-  const results = raw.map(mapCustomer);
+  try {
+    const token = await getBearerToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    
+    // Try the optimized quick-search endpoint first (only if it looks like a name, not phone)
+    const isLikelyPhone = /^\d+$/.test(term.replace(/\D/g, '')) && term.replace(/\D/g, '').length >= 7;
+    
+    if (!isLikelyPhone) {
+      try {
+        const quickResponse = await api.get<{ success: boolean; data: { customers: RawCustomer[]; count: number; searchTime: number } }>(
+          '/customers/quick-search',
+          {
+            params: { q: term, limit: pageSize },
+            headers,
+            timeout: 12000, // 12s timeout for quick search
+          }
+        );
+        
+        const elapsed = Date.now() - startTime;
+        const serverTime = quickResponse.data?.data?.searchTime ?? 0;
+        const raw = quickResponse.data?.data?.customers ?? [];
+        const results = raw.map(mapCustomer);
+        
+        console.log(`[API] Quick search completed in ${elapsed}ms (server: ${serverTime}ms): "${term}" → ${results.length} results`);
+        
+        setCachedSearch(term, results);
+        return results;
+      } catch (quickError: unknown) {
+        // Only log warning if it's not a 404 (endpoint doesn't exist yet)
+        const isNotFound = quickError && typeof quickError === 'object' && 'response' in quickError && 
+          (quickError as { response?: { status?: number } }).response?.status === 404;
+        if (!isNotFound) {
+          console.warn(`[API] Quick search failed, falling back to standard search`);
+        }
+        // Fall through to standard search
+      }
+    }
+    
+    // Fallback to standard /customers endpoint
+    const response = await api.get<CustomersListResponse>('/customers', {
+      params: { search: term, page: 1, pageSize },
+      headers,
+    });
 
-  setCachedSearch(term, results);
-  return results;
+    const elapsed = Date.now() - startTime;
+    const raw = response.data?.data?.customers ?? response.data?.data?.data ?? [];
+    const results = raw.map(mapCustomer);
+
+    console.log(`[API] Customer search completed in ${elapsed}ms: "${term}" → ${results.length} results`);
+    
+    setCachedSearch(term, results);
+    return results;
+  } catch (error) {
+    const elapsed = Date.now() - startTime;
+    console.error(`[API] Customer search FAILED after ${elapsed}ms: "${term}"`, error);
+    throw error;
+  }
 }
 
 /** Legacy helper: returns only the first matching customer ID */
@@ -181,12 +233,129 @@ export async function findCustomerIdBySearch(
   return matches.length > 0 ? matches[0]!.id : null;
 }
 
+/**
+ * Optimized phone search - uses the /customers/quick-search endpoint
+ * which automatically detects phone numbers and optimizes the search.
+ * Falls back to the legacy search method if the optimized endpoint fails.
+ */
 export async function findCustomersByPhone(
   phone: string,
 ): Promise<CustomerMatch[]> {
   const normalized = normalizePhoneForSearch(phone);
   if (normalized.length < 3) return [];
-  return findCustomersBySearch(normalized, 5);
+  
+  // For US phones, remove country code (1) to match database format
+  // Most US phones in the database are stored as 10-digit numbers
+  const searchPhone = normalized.length === 11 && normalized.startsWith('1') 
+    ? normalized.slice(1) 
+    : normalized;
+  
+  // Return cached result if available
+  const cached = getCachedSearch(`phone:${searchPhone}`);
+  if (cached) {
+    console.log(`[Cache] HIT phone search: "${searchPhone}" (${cached.length} results)`);
+    return cached;
+  }
+  
+  const startTime = Date.now();
+  console.log(`[Phone] Starting optimized phone search: "${phone}" → search: "${searchPhone}"`);
+  
+  try {
+    // Use the quick-search endpoint which auto-detects phone searches
+    const token = await getBearerToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+    
+    const response = await api.get<{ success: boolean; data: { customers: RawCustomer[]; count: number; searchTime: number } }>(
+      '/customers/quick-search',
+      {
+        params: { q: searchPhone, limit: 5 },
+        headers,
+        timeout: 15000, // 15s timeout for phone search
+      }
+    );
+    
+    const elapsed = Date.now() - startTime;
+    const serverTime = response.data?.data?.searchTime ?? 0;
+    const raw = response.data?.data?.customers ?? [];
+    const results = raw.map(mapCustomer);
+    
+    console.log(`[Phone] Quick search completed in ${elapsed}ms (server: ${serverTime}ms): "${phone}" → ${results.length} results`);
+    
+    // Cache results for subsequent lookups
+    if (results.length > 0) {
+      setCachedSearch(`phone:${searchPhone}`, results);
+    }
+    
+    return results;
+  } catch (error) {
+    const elapsed = Date.now() - startTime;
+    console.warn(`[Phone] Quick search failed after ${elapsed}ms, falling back to legacy search:`, error);
+    
+    // Fallback to legacy parallel search method
+    return findCustomersByPhoneLegacy(phone);
+  }
+}
+
+/**
+ * Legacy phone search - searches multiple phone variants in parallel
+ * using the general /customers endpoint.
+ */
+async function findCustomersByPhoneLegacy(
+  phone: string,
+): Promise<CustomerMatch[]> {
+  const normalized = normalizePhoneForSearch(phone);
+  if (normalized.length < 3) return [];
+  
+  const startTime = Date.now();
+  console.log(`[Phone-Legacy] Starting phone search: "${phone}" → normalized: "${normalized}"`);
+  
+  // Build all variants to search in parallel (most common format first)
+  const variants: string[] = [];
+  
+  // US phone without country code (10 digits) - most common format in the database
+  if (normalized.length > 10) {
+    variants.push(normalized.slice(-10));
+  }
+  
+  // Full normalized number
+  variants.push(normalized);
+  
+  // Last 7 digits (local number without area code)
+  if (normalized.length > 7) {
+    const last7 = normalized.slice(-7);
+    if (!variants.includes(last7)) {
+      variants.push(last7);
+    }
+  }
+  
+  // Remove duplicates
+  const uniqueVariants = [...new Set(variants)];
+  console.log(`[Phone-Legacy] Searching variants in parallel: ${uniqueVariants.join(', ')}`);
+  
+  // Search ALL variants in parallel for faster results
+  const searchPromises = uniqueVariants.map(v => 
+    findCustomersBySearch(v, 5).catch(() => [] as CustomerMatch[])
+  );
+  
+  const allResults = await Promise.all(searchPromises);
+  
+  // Merge and deduplicate results, prioritizing first matches
+  const seen = new Set<number>();
+  const results: CustomerMatch[] = [];
+  
+  for (const batch of allResults) {
+    for (const customer of batch) {
+      if (!seen.has(customer.id)) {
+        seen.add(customer.id);
+        results.push(customer);
+      }
+    }
+  }
+  
+  const elapsed = Date.now() - startTime;
+  console.log(`[Phone-Legacy] Phone search completed in ${elapsed}ms: "${phone}" → ${results.length} results`);
+  
+  return results;
 }
 
 type TeamListResponse = {

@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createServer } from 'http';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import { twilioVoiceRouter } from './twilio/voiceWebhook.js';
@@ -14,6 +15,8 @@ import { getAvailableLlmProvider } from './llm/llmClient.js';
 import { isAzureTtsConfigured } from './tts/azureNeuralTts.js';
 import { detectWindowFrame } from './ocr/windowFrameDetector.js';
 import { detectWindowFrameWithVision, isAzureVisionConfigured } from './ocr/azureVisionOcr.js';
+import { setupVoiceWebSocket, isVoiceWebSocketReady } from './realtime/voiceWebSocket.js';
+import { isAzureSttConfigured } from './stt/azureSpeechStt.js';
 
 export async function startServer() {
   const app = express();
@@ -33,8 +36,10 @@ export async function startServer() {
       service: 'blindsbook-ia',
       status: 'healthy',
       llm: llmProvider,    // 'azure-openai' | 'ollama' | 'none'
-      tts: isAzureTtsConfigured() ? 'azure-speech' : 'twilio-say-fallback',
+      tts: isAzureTtsConfigured() ? 'azure-speech-sdk' : 'twilio-say-fallback',
+      stt: isAzureSttConfigured() ? 'azure-speech-sdk' : 'browser-webspeech',
       ocr: isAzureVisionConfigured() ? 'azure-openai-vision + edge-detection' : 'edge-detection-only',
+      voiceWebSocket: isVoiceWebSocketReady() ? 'ready' : 'fallback-http',
     });
   });
 
@@ -294,10 +299,22 @@ export async function startServer() {
 
   const port = Number(process.env.PORT || 4000);
 
+  // Create HTTP server and attach WebSocket
+  const httpServer = createServer(app);
+  
+  // Setup WebSocket for real-time voice communication
+  setupVoiceWebSocket(httpServer);
+
   await new Promise<void>((resolve) => {
-    app.listen(port, () => {
+    httpServer.listen(port, () => {
       // eslint-disable-next-line no-console
       console.log(`🚗 Servicio IA recepcionista escuchando en puerto ${port}`);
+      console.log(`📞 WebSocket de voz disponible en ws://localhost:${port}/ws/voice`);
+      if (isAzureSttConfigured()) {
+        console.log('✅ Azure Speech SDK configurado (STT + TTS profesional)');
+      } else {
+        console.log('⚠️ Azure Speech no configurado - usando fallback del navegador para STT');
+      }
       resolve();
     });
   });
