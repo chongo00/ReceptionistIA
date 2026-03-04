@@ -15,7 +15,7 @@ import { getAvailableLlmProvider } from './llm/llmClient.js';
 import { isAzureTtsConfigured } from './tts/azureNeuralTts.js';
 import { detectWindowFrame } from './ocr/windowFrameDetector.js';
 import { detectWindowFrameWithVision, isAzureVisionConfigured } from './ocr/azureVisionOcr.js';
-import { setupVoiceWebSocket, isVoiceWebSocketReady } from './realtime/voiceWebSocket.js';
+import { setupVoiceWebSocket, isVoiceWebSocketReady, shutdownVoiceWebSocket, getSessionStats } from './realtime/voiceWebSocket.js';
 import { isAzureSttConfigured } from './stt/azureSpeechStt.js';
 
 export async function startServer() {
@@ -31,15 +31,17 @@ export async function startServer() {
 
   app.get('/health', async (_req, res) => {
     const llmProvider = await getAvailableLlmProvider();
+    const sessionStats = getSessionStats();
     res.json({
       ok: true,
       service: 'blindsbook-ia',
       status: 'healthy',
-      llm: llmProvider,    // 'azure-openai' | 'ollama' | 'none'
+      llm: llmProvider,
       tts: isAzureTtsConfigured() ? 'azure-speech-sdk' : 'twilio-say-fallback',
       stt: isAzureSttConfigured() ? 'azure-speech-sdk' : 'browser-webspeech',
       ocr: isAzureVisionConfigured() ? 'azure-openai-vision + edge-detection' : 'edge-detection-only',
       voiceWebSocket: isVoiceWebSocketReady() ? 'ready' : 'fallback-http',
+      sessions: sessionStats,
     });
   });
 
@@ -307,7 +309,6 @@ export async function startServer() {
 
   await new Promise<void>((resolve) => {
     httpServer.listen(port, () => {
-      // eslint-disable-next-line no-console
       console.log(`🚗 Servicio IA recepcionista escuchando en puerto ${port}`);
       console.log(`📞 WebSocket de voz disponible en ws://localhost:${port}/ws/voice`);
       if (isAzureSttConfigured()) {
@@ -318,5 +319,20 @@ export async function startServer() {
       resolve();
     });
   });
+
+  // Graceful shutdown
+  const shutdown = async (signal: string) => {
+    console.log(`\n[Server] ${signal} received — graceful shutdown...`);
+    await shutdownVoiceWebSocket();
+    httpServer.close(() => {
+      console.log('[Server] HTTP server closed');
+      process.exit(0);
+    });
+    // Force exit after 10s if graceful close hangs
+    setTimeout(() => { console.error('[Server] Forced exit after timeout'); process.exit(1); }, 10_000);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 

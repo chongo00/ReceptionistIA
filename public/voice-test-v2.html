@@ -208,8 +208,10 @@
 // BlindsBook Voice Test v2 — WebSocket + Azure Speech SDK
 // ═══════════════════════════════════════════════════════════════
 
-var API_BASE = 'http://localhost:4000';
-var WS_URL = 'ws://localhost:4000/ws/voice';
+// Detecta dinámicamente el host/puerto actual para evitar puertos fijos
+var origin = window.location.origin; // p.ej. http://localhost:4100
+var API_BASE = origin;
+var WS_URL = (origin.startsWith('https') ? 'wss://' : 'ws://') + window.location.host + '/ws/voice';
 
 // State
 var ws = null;
@@ -224,6 +226,9 @@ var audioContext = null;
 var isRecording = false;
 var currentAudio = null;
 
+// Init que está pendiente de enviarse (para evitar carreras con ws.onopen)
+var pendingInitData = null;
+
 // ═══ CONNECTION ═══
 function connect() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -236,6 +241,9 @@ function connect() {
   ws.onopen = function() {
     log('✅ WebSocket conectado', 'ok');
     setConnectionStatus('connected', 'Conectado');
+
+    // Si hay una llamada pendiente, envía el init ahora
+    sendPendingInit();
   };
   
   ws.onmessage = function(event) {
@@ -325,20 +333,19 @@ async function startCall() {
   
   document.getElementById('btnCall').disabled = true;
   document.getElementById('btnCall').textContent = '⏳ Conectando...';
-  
-  // Connect to WebSocket
+
+  // Guardar datos de init por si el socket aún no está abierto
+  pendingInitData = {
+    callerId: phone || null,
+    companyPhone: null,
+  };
+
+  // Conectar (si no lo está) y dejar que onopen envíe el init
   connect();
-  
-  // Wait for connection
-  await waitForConnection();
-  
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    document.getElementById('btnCall').disabled = false;
-    document.getElementById('btnCall').textContent = '📞 Llamar';
-    addMessage('system', '❌ No se pudo conectar al servidor');
-    return;
-  }
-  
+
+  // Si ya está abierto (por ejemplo, reconexión), intentar enviar de inmediato
+  sendPendingInit();
+
   callActive = true;
   callStartTime = Date.now();
   callTimerInterval = setInterval(updateCallTimer, 1000);
@@ -353,14 +360,7 @@ async function startCall() {
   setStatusBar('processing', '📡 Conectando con IA...');
   addMessage('system', '📞 Llamada iniciada');
   
-  // Initialize session
-  ws.send(JSON.stringify({
-    type: 'init',
-    data: {
-      callerId: phone || null,
-      companyPhone: null,
-    }
-  }));
+  // El mensaje init se envía desde sendPendingInit() cuando el WebSocket esté listo
 }
 
 function waitForConnection() {
@@ -381,6 +381,20 @@ function waitForConnection() {
       }
     }, 100);
   });
+}
+
+// Envía el init pendiente si hay WebSocket abierto
+function sendPendingInit() {
+  if (!pendingInitData) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  log('📤 Enviando init a IA...', 'ok');
+  ws.send(JSON.stringify({
+    type: 'init',
+    data: pendingInitData,
+  }));
+
+  pendingInitData = null;
 }
 
 function selectLanguage(lang) {

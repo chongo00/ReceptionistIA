@@ -38,28 +38,43 @@ const LANG_CODES: Record<SpeechLanguage, string> = {
   en: 'en-US',
 };
 
-let speechConfig: sdk.SpeechConfig | null = null;
+let _azureKey: string | null = null;
+let _azureRegion: string | null = null;
 
-function getSpeechConfig(): sdk.SpeechConfig {
-  if (speechConfig) return speechConfig;
-  
+function getCredentials(): { key: string; region: string } {
+  if (_azureKey && _azureRegion) return { key: _azureKey, region: _azureRegion };
+
   const env = loadEnv();
-  const key = env.azureSpeechKey;
-  const region = env.azureSpeechRegion;
-  
-  if (!key || !region) {
+  if (!env.azureSpeechKey || !env.azureSpeechRegion) {
     throw new Error('Azure Speech not configured (AZURE_SPEECH_KEY/AZURE_SPEECH_REGION)');
   }
-  
-  speechConfig = sdk.SpeechConfig.fromSubscription(key, region);
-  
-  // Enable detailed output for better accuracy
-  speechConfig.outputFormat = sdk.OutputFormat.Detailed;
-  
-  // Enable profanity filtering (mask)
-  speechConfig.setProfanity(sdk.ProfanityOption.Masked);
-  
-  return speechConfig;
+  _azureKey = env.azureSpeechKey;
+  _azureRegion = env.azureSpeechRegion;
+  return { key: _azureKey, region: _azureRegion };
+}
+
+/**
+ * Creates a fresh SpeechConfig per recognizer — avoids race conditions
+ * when multiple sessions with different languages run concurrently.
+ */
+function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number): sdk.SpeechConfig {
+  const { key, region } = getCredentials();
+  const cfg = sdk.SpeechConfig.fromSubscription(key, region);
+
+  cfg.outputFormat = sdk.OutputFormat.Detailed;
+  cfg.setProfanity(sdk.ProfanityOption.Masked);
+  cfg.speechRecognitionLanguage = LANG_CODES[language];
+
+  cfg.setProperty(
+    sdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
+    String(silenceTimeoutMs ?? 1500)
+  );
+  cfg.setProperty(
+    sdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs,
+    '10000'
+  );
+
+  return cfg;
 }
 
 /**
@@ -74,27 +89,12 @@ export function createPushStreamRecognizer(
   start: () => Promise<void>;
   stop: () => Promise<void>;
 } {
-  const speechCfg = getSpeechConfig();
-  speechCfg.speechRecognitionLanguage = LANG_CODES[config.language];
-  
-  // Configure silence detection
-  // Segmentation silence: how long to wait after speech ends before finalizing
-  speechCfg.setProperty(
-    sdk.PropertyId.Speech_SegmentationSilenceTimeoutMs, 
-    String(config.silenceTimeoutMs ?? 1500)
-  );
-  
-  // Initial silence: how long to wait for speech before giving up
-  speechCfg.setProperty(
-    sdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs,
-    '10000'
-  );
-  
-  // Create push stream for receiving audio data
+  const speechCfg = createSttConfig(config.language, config.silenceTimeoutMs);
+
   const audioFormat = sdk.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1);
   const pushStream = sdk.AudioInputStream.createPushStream(audioFormat);
   const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
-  
+
   const recognizer = new sdk.SpeechRecognizer(speechCfg, audioConfig);
   
   // Handle interim results (while speaking)
@@ -164,8 +164,7 @@ export async function recognizeFromBuffer(
   audioBuffer: Buffer,
   language: SpeechLanguage = 'es'
 ): Promise<RecognitionResult | null> {
-  const speechCfg = getSpeechConfig();
-  speechCfg.speechRecognitionLanguage = LANG_CODES[language];
+  const speechCfg = createSttConfig(language);
   
   const audioFormat = sdk.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1);
   const pushStream = sdk.AudioInputStream.createPushStream(audioFormat);

@@ -7,7 +7,9 @@ services:
       context: .
       dockerfile: Dockerfile.cloud
     ports:
-      - "4000:4000"      # App Node.js
+      # Host 4100 en localhost → Container 4000
+      # Forzamos 127.0.0.1 para evitar restricciones de 0.0.0.0 en Windows
+      - "127.0.0.1:4100:4000"      # App Node.js (host 4100)
     environment:
       - PORT=4000
       - BLINDSBOOK_API_BASE_URL=${BLINDSBOOK_API_BASE_URL:-http://host.docker.internal:3000}
@@ -17,7 +19,7 @@ services:
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
       - TWILIO_NUMBER_TO_COMPANY_MAP=${TWILIO_NUMBER_TO_COMPANY_MAP:-}
       - TWILIO_VALIDATE_SIGNATURE=false
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:4000}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:4100}
       # Azure OpenAI (primary LLM)
       - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
       - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
@@ -33,6 +35,9 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
       # Docker TTS (disabled by default — use Azure Speech)
       - DOCKER_TTS_URL=${DOCKER_TTS_URL:-}
+    volumes:
+      # Monta la carpeta public local dentro del contenedor para evitar rebuilds
+      - ./public:/app/public:ro
     deploy:
       resources:
         limits:
@@ -45,8 +50,8 @@ services:
   #   ports:
   #     - "8000:8000"
   #   restart: unless-stopped
-  # Note: OCR (POST /ocr/window-frame) is served from blindsbook-ia on port 4000.
-  # Drapery Calculator app uses VITE_BLINDSBOOK_IA_URL=http://localhost:4000
+  # Note: OCR (POST /ocr/window-frame) is served from blindsbook-ia on internal port 4000.
+  # Drapery Calculator app uses VITE_BLINDSBOOK_IA_URL=http://localhost:4100 en entorno local.
 
   # Ollama (uncomment ONLY if you need local LLM fallback without Azure OpenAI)
   # ollama:

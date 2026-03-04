@@ -1,7 +1,7 @@
 # Chat test script (POST /debug/chat)
-# Requires service running at http://localhost:4000
+# Requires service running at http://localhost:4100
 
-$baseUrl = "http://localhost:4000"
+$baseUrl = "http://localhost:4100"
 $callId = "test-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
 Write-Host "=== RecepcionistIA Chat Test ===" -ForegroundColor Cyan

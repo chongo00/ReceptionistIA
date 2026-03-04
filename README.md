@@ -1,267 +1,96 @@
-# BlindsBook IA – Recepcionista Telefónica + OCR Window Detection
+# BlindsBook — Receptionist IA
 
-Servicio Node.js (TypeScript) que actúa como **plataforma central de IA para BlindsBook**, con dos funcionalidades principales:
+Agente de call center automatizado que atiende llamadas telefonicas, identifica clientes y gestiona citas en BlindsBook. Tambien expone un endpoint OCR para deteccion de marcos de ventana.
 
-1. **Recepcionista telefónica** — Atiende llamadas entrantes desde Twilio, identifica al cliente automáticamente (cascada de 3 niveles), guía la conversación por voz y crea citas en la API de BlindsBook.
-2. **OCR / Window Frame Detection** — Endpoint `POST /ocr/window-frame` que recibe fotos de ventanas y devuelve las coordenadas del marco detectado. Usado por la app [Drapery Calculator](../AppBlindsbook%20Drapery-Calculator/Drapery-Calculator-Vue) para calcular medidas de cortinas.
+## Stack tecnologico
+
+- **Runtime:** Node.js 22+ / TypeScript
+- **LLM:** Azure OpenAI (gpt-4o-mini) — Ollama como fallback
+- **Voz:** Azure Speech SDK (STT + TTS neuronal)
+- **Telefonia:** Twilio (produccion) / WebSocket (desarrollo)
+- **Backend:** API BlindsBook (NestJS / SQL Server)
+- **Container:** Docker multi-stage (~200MB)
 
 ## Arquitectura
 
 ```
-              Llamada entrante                      Foto de ventana
-                    │                                     │
-               Twilio (STT)                     Drapery Calculator App
-                    │                                     │
-               ┌────┴─────────── Express API (puerto 4000) ──────────┐
-               │                                                      │
-         Dialogue Manager                              POST /ocr/window-frame
-   ├── Nivel 1: Caller ID                                    │
-   ├── Nivel 2: Nombre/teléfono                      Sharp (edge detection)
-   └── Nivel 3: Ollama (LLM local)                          │
-               │                                     { rectangle, confidence }
-    TTS (Azure / Piper / none)
-               │
-    Twilio (<Say> / <Play>)
+    Twilio / WebSocket ──→ Express (4000)
+                              │
+                   ┌──────────┴──────────┐
+                   │  Dialogue Manager   │  OCR Controller
+                   │  (maquina estados)  │  (Azure Vision + Sharp)
+                   │       │             │
+                   │  Azure OpenAI       │
+                   │  Azure Speech       │
+                   │       │             │
+                   │  BlindsBook API     │
+                   │  (TokenManager)     │
+                   └─────────────────────┘
 ```
 
-El sistema utiliza una **cascada de identificación de 3 niveles** que reconoce al cliente en ~90 % de los casos sin intervención del LLM, reservando Ollama para los casos ambiguos o complejos.
+**Concurrencia:** Hasta 20 llamadas simultaneas con aislamiento completo por sesion. Rate limiting de 15 operaciones TTS concurrentes. Graceful shutdown con limpieza de recursos.
 
-## Estructura del proyecto
-
-```
-├── docs/
-│   ├── GUIA_PRUEBAS_MANUALES.md            # Guía de pruebas v3.0 — Docker, 14 escenarios
-│   ├── PLAN_IDENTIFICACION_CLIENTE_OPCION_D.md  # Plan técnico: cascada 3 niveles + Ollama
-│   ├── GUIA_COMPLETA.md                    # Azure Speech, Twilio, ngrok, costos
-│   └── Ia.md                               # Alternativas N8N + Gemini/Ollama
-├── scripts/
-│   └── test_chat.ps1                       # Script PowerShell para pruebas rápidas
-├── tests/
-│   └── audio/                              # MP3 de prueba generados (ignorados por git)
-├── public/
-│   └── voice-test.html                     # UI de prueba en navegador (/test/voice-test.html)
-├── src/
-│   ├── index.ts                            # Punto de entrada
-│   ├── server.ts                           # Express: rutas, /health, /debug/*, /twilio
-│   ├── config/env.ts                       # Variables de entorno y validación
-│   ├── twilio/voiceWebhook.ts              # Webhook Twilio (TwiML)
-│   ├── dialogue/
-│   │   ├── state.ts                        # ConversationState + ConversationStep
-│   │   ├── manager.ts                      # Máquina de estados principal
-│   │   └── dateParser.ts                   # Parser de fechas en lenguaje natural
-│   ├── blindsbook/
-│   │   └── appointmentsClient.ts           # Cliente API BlindsBook (customers, appointments)
-│   ├── llm/
-│   │   ├── ollamaClient.ts                 # Cliente Ollama (tool calling)
-│   │   └── identificationAgent.ts          # Agente LLM para identificación nivel 3
-│   ├── ocr/
-│   │   └── windowFrameDetector.ts          # Detección de marco de ventana (Sharp)
-│   ├── tts/
-│   │   ├── ttsProvider.ts                  # Selector TTS: Piper → Azure → none
-│   │   ├── ttsCache.ts                     # Caché temporal de MP3 (10 min)
-│   │   └── dockerTts.ts                    # Cliente Piper TTS (Docker local)
-│   └── models/
-│       └── appointments.ts                 # Tipos y DTOs
-├── Dockerfile                              # Imagen Node.js (blindsbook-ia)
-├── Dockerfile.ollama-preloaded             # Imagen Ollama con qwen2.5:3b pre-cargado
-├── docker-compose.yml                      # Orquestación: blindsbook-ia + ollama
-├── package.json
-├── tsconfig.json
-└── .env.example
-```
-
-## Inicio rápido (Docker — recomendado)
-
-### 1. Clonar y configurar entorno
+## Inicio rapido (Docker)
 
 ```bash
-cd "Receptionist IA"
 cp .env.example .env
-# Edita .env con tus credenciales
-```
+# Editar .env con credenciales de Azure OpenAI, Azure Speech, BlindsBook API
 
-### 2. Construir y levantar los servicios
-
-```bash
 docker compose up -d --build
+curl http://localhost:4100/health
 ```
 
-Esto construye **dos imágenes**:
-- `blindsbook-ia` — el servidor Node.js (puerto 4000)
-- `ollama` — Ollama con `qwen2.5:3b` ya descargado dentro de la imagen (no requiere `docker exec` manual)
+Simulador de llamada: `http://localhost:4100/test/voice-test-v2.html`
 
-### 3. Verificar que todo funciona
-
-```bash
-# Health check general + estado de Ollama
-curl http://localhost:4000/health
-
-# Respuesta esperada:
-# {"ok":true,"service":"blindsbook-ia","status":"healthy","ollama":"connected"}
-```
-
-### 4. Prueba de conversación (sin Twilio)
-
-```bash
-curl -s -X POST http://localhost:4000/debug/chat \
-  -H "Content-Type: application/json" \
-  -d '{"callId":"test-1","text":null,"fromNumber":"+15550001111","toNumber":"+15559998888"}'
-```
-
-Ver la guía completa de pruebas: [`docs/GUIA_PRUEBAS_MANUALES.md`](docs/GUIA_PRUEBAS_MANUALES.md)
-
----
-
-## Desarrollo local (sin Docker)
+## Desarrollo local
 
 ```bash
 npm install
 npm run dev
+# Servidor en http://localhost:4000
 ```
 
-El servidor escucha en `http://localhost:4000`. Para funcionalidad completa necesitas:
-- **Ollama** corriendo localmente: `OLLAMA_URL=http://localhost:11434`
-- **API de BlindsBook** accesible: `BLINDSBOOK_API_BASE_URL=http://localhost:3000`
+## Variables de entorno principales
 
----
+| Variable | Descripcion |
+|----------|-------------|
+| `AZURE_OPENAI_ENDPOINT` | Endpoint Azure OpenAI |
+| `AZURE_OPENAI_API_KEY` | API Key Azure OpenAI |
+| `AZURE_OPENAI_DEPLOYMENT` | Deployment (ej: `gpt-4o-mini`) |
+| `AZURE_SPEECH_KEY` | Clave Azure Speech |
+| `AZURE_SPEECH_REGION` | Region (ej: `eastus`) |
+| `BLINDSBOOK_API_BASE_URL` | URL de la API BlindsBook |
+| `BLINDSBOOK_LOGIN_EMAIL` | Email superusuario |
+| `BLINDSBOOK_LOGIN_PASSWORD` | Password superusuario |
+| `TWILIO_NUMBER_TO_COMPANY_MAP` | Mapeo numeros → companias (JSON) |
 
-## Variables de entorno clave
-
-| Variable | Descripción | Valor por defecto |
-|---|---|---|
-| `PORT` | Puerto del servidor | `4000` |
-| `BLINDSBOOK_API_BASE_URL` | URL base de la API BlindsBook | `http://localhost:3000` |
-| `BLINDSBOOK_API_TOKEN` | JWT de servicio (opcional si usas login) | – |
-| `BLINDSBOOK_LOGIN_EMAIL` | Email para auto-login en dev | – |
-| `BLINDSBOOK_LOGIN_PASSWORD` | Password para auto-login en dev | – |
-| `TWILIO_AUTH_TOKEN` | Token para validar firmas de Twilio | – |
-| `TWILIO_NUMBER_TO_COMPANY_MAP` | JSON: número → companyId + token JWT | `{}` |
-| `OLLAMA_URL` | URL del servidor Ollama | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Modelo LLM a usar | `qwen2.5:3b` |
-| `AZURE_SPEECH_KEY` | Clave Azure Speech (TTS neuronal) | – |
-| `AZURE_SPEECH_REGION` | Región Azure Speech | – |
-| `DOCKER_TTS_URL` | URL del servicio Piper TTS | `http://localhost:8000` |
-| `PUBLIC_BASE_URL` | URL pública del servicio (para Twilio `<Play>`) | – |
-
-### Multi-tenant
-
-El sistema soporta múltiples empresas en el mismo servidor. Cada número Twilio se mapea a una empresa:
-
-```bash
-TWILIO_NUMBER_TO_COMPANY_MAP='{"+15550000001":{"token":"jwt_empresa_a","companyId":387},"+15550000002":{"token":"jwt_empresa_b","companyId":412}}'
-```
-
----
+Ver `.env.example` para la lista completa.
 
 ## Flujo conversacional
 
 ```
-Llamada entra
-  └─ Identificación nivel 1: Caller ID
-       ├─ Encontrado → confirma y continúa
-       └─ No encontrado → Nivel 2: pregunta nombre/teléfono
-            ├─ Un resultado → confirma y continúa
-            ├─ Varios → desambigua (lista opciones)
-            └─ Sin resultado → Nivel 3: Ollama LLM
-                 └─ Usa tool calling para buscar en la API
-  └─ Tipo de cita (cotización / instalación / reparación / otro)
-  └─ Fecha y hora
-  └─ Crear cita en API BlindsBook
-  └─ Confirmación y despedida
+Llamada entra → Seleccion de idioma (ES/EN)
+  → Identificacion (Caller ID → Nombre → LLM fallback)
+    → Tipo de cita (cotizacion / instalacion / reparacion)
+      → Fecha y hora (lenguaje natural)
+        → Confirmacion → Cita creada en BlindsBook
 ```
 
----
+## Endpoints
 
-## Endpoints principales
+| Metodo | Ruta | Descripcion |
+|--------|------|-------------|
+| `GET` | `/health` | Estado del servicio y sesiones activas |
+| `WS` | `/ws/voice` | WebSocket para voz en tiempo real |
+| `POST` | `/debug/chat` | Simula conversacion por texto |
+| `POST` | `/debug/voice-chat` | Conversacion + audio TTS |
+| `GET` | `/debug/customer-lookup?phone=...` | Busqueda de clientes |
+| `POST` | `/twilio/voice-webhook` | Webhook Twilio |
+| `POST` | `/ocr/window-frame` | OCR marco de ventana |
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| `GET` | `/health` | Estado del servicio y conexión Ollama |
-| `POST` | `/ocr/window-frame` | Detección de marco de ventana (Drapery Calculator) |
-| `POST` | `/twilio/voice-webhook` | Webhook para llamadas entrantes de Twilio |
-| `POST` | `/debug/chat` | Simula turnos de conversación (texto) |
-| `POST` | `/debug/voice-chat` | Simula turnos + devuelve audio TTS |
-| `GET` | `/debug/play-audio?text=...` | Genera y reproduce MP3 directamente |
-| `GET` | `/tts/:id.mp3` | Sirve audio TTS (caché 10 min) |
-| `GET` | `/test/` | UI de prueba en navegador |
-
----
-
-## OCR — Detección de marco de ventana
-
-Este servicio expone `POST /ocr/window-frame` para la app **Drapery Calculator**. Cuando un usuario toma una foto de una ventana, la app envía la imagen a este endpoint y recibe las coordenadas del marco detectado.
-
-### Cómo funciona
-
-1. Recibe imagen (base64) + dimensiones originales
-2. Redimensiona a max 512px (rendimiento)
-3. Convierte a escala de grises
-4. Aplica detección de bordes (kernel Laplaciano)
-5. Genera histogramas de proyección (filas/columnas)
-6. Identifica los bordes dominantes del marco
-7. Devuelve coordenadas del rectángulo + confianza
-
-### Ejemplo de uso
-
-```bash
-curl -X POST http://localhost:4000/ocr/window-frame \
-  -H "Content-Type: application/json" \
-  -d '{"image":"data:image/jpeg;base64,/9j/4AAQ...","width":1920,"height":1080}'
-```
-
-Respuesta exitosa:
-```json
-{
-  "rectangle": {
-    "topLeft": { "x": 120, "y": 80 },
-    "topRight": { "x": 1800, "y": 80 },
-    "bottomLeft": { "x": 120, "y": 1000 },
-    "bottomRight": { "x": 1800, "y": 1000 },
-    "width": 1680,
-    "height": 920
-  },
-  "confidence": 0.82
-}
-```
-
-Si no detecta marco: `{ "error": "no_window" }`
-
-### Integración con Drapery Calculator
-
-La app Drapery Calculator (`AppBlindsbook Drapery-Calculator/`) usa una cascada de 3 niveles para detección:
-
-| Nivel | Servicio | Configuración |
-|---|---|---|
-| 1 | **BlindsBook-IA** (este servicio) | `VITE_BLINDSBOOK_IA_URL=http://localhost:4000` |
-| 2 | Google Gemini Vision | `VITE_GEMINI_API_KEY` (opcional) |
-| 3 | Hough local (navegador) | Siempre disponible, sin config |
-
-Para probar la integración completa:
-1. Levantar este servicio: `docker compose up -d --build` (o `npm run dev`)
-2. En la carpeta de Drapery Calculator, configurar `.env`:
-   ```
-   VITE_BLINDSBOOK_IA_URL=http://localhost:4000
-   ```
-3. Ejecutar la app Drapery Calculator: `npm run dev` (Ionic serve)
-4. Abrir la pestaña OCR (cámara) y tomar una foto de una ventana
-
----
-
-## Configuración Twilio
-
-1. Crea o usa un número de teléfono de voz en Twilio.
-2. En *A Call Comes In*, configura:
-   - Tipo: `Webhook` / `HTTP POST`
-   - URL: `https://TU_DOMINIO_PUBLICO/twilio/voice-webhook`
-3. En desarrollo puedes usar ngrok: `ngrok http 4000`
-
----
-
-## Documentación
+## Documentacion
 
 | Documento | Contenido |
-|---|---|
-| [docs/GUIA_PRUEBAS_MANUALES.md](docs/GUIA_PRUEBAS_MANUALES.md) | Guía de pruebas v3.0: Docker, 14 escenarios, identificación 3 niveles, troubleshooting |
-| [docs/PLAN_IDENTIFICACION_CLIENTE_OPCION_D.md](docs/PLAN_IDENTIFICACION_CLIENTE_OPCION_D.md) | Plan técnico completo: cascada de identificación, Ollama, tool calling, deploy |
-| [docs/GUIA_COMPLETA.md](docs/GUIA_COMPLETA.md) | Voz neuronal (Azure Speech), Twilio, ngrok, costos, despliegue en Azure |
-| [docs/Ia.md](docs/Ia.md) | Alternativas con N8N + Ollama/Gemini (100 % gratis) |
+|-----------|-----------|
+| [`docs/DOCUMENTACION_GENERAL.md`](docs/DOCUMENTACION_GENERAL.md) | Documentacion tecnica completa: arquitectura, flujo, concurrencia, despliegue, troubleshooting |
+| [`docs/GUIA_PRUEBAS_MANUALES.md`](docs/GUIA_PRUEBAS_MANUALES.md) | Guia de pruebas: escenarios, numeros de prueba, verificacion |

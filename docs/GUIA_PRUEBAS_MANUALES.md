@@ -1,4 +1,4 @@
-﻿# Guía de Pruebas Manuales — Receptionist IA (BlindsBook)
+# Guía de Pruebas Manuales — Receptionist IA (BlindsBook)
 
 > **Fecha:** Febrero 2026 — Versión 4.0 (Azure OpenAI + Azure Speech)
 > **Arquitectura actual:** Node.js slim (~444MB) · Azure OpenAI (LLM) · Azure Speech (TTS) · API BlindsBook (Azure cloud)
@@ -78,7 +78,7 @@ docker compose logs --tail 20 blindsbook-ia
 ## 3. Paso 3 — Verificar que todo funciona
 
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:4000/health" | ConvertTo-Json
+Invoke-RestMethod -Uri "http://localhost:4100/health" | ConvertTo-Json
 ```
 
 **Respuesta esperada con Azure configurado:**
@@ -98,7 +98,7 @@ Si `"llm"` muestra `"none"`, revisa que las 3 variables `AZURE_OPENAI_*` estén 
 ### Probar que el audio TTS funciona
 
 ```powershell
-Invoke-WebRequest -Uri "http://localhost:4000/debug/play-audio?text=Hola%20bienvenido%20a%20BlindsBook&lang=es" `
+Invoke-WebRequest -Uri "http://localhost:4100/debug/play-audio?text=Hola%20bienvenido%20a%20BlindsBook&lang=es" `
   -UseBasicParsing -OutFile "test_audio.mp3"
 Start-Process "test_audio.mp3"
 # Debes escuchar la voz Elvira (Azure Neural, español)
@@ -118,9 +118,13 @@ Invoke-RestMethod "https://blindsbook-mobile-api-test.ambitiouswave-0fcb242f.eas
 
 ## 4. Paso 4 — Abrir la página de pruebas de voz
 
-**URL:** **[http://localhost:4000/test/voice-test.html](http://localhost:4000/test/voice-test.html)**
+> **Nota:** En Docker local el contenedor expone el servicio en el puerto **4100** del host  
+> (internamente la app sigue escuchando en el puerto 4000). Si cambias ese puerto en  
+> `docker-compose.yml`, ajusta también las URLs de esta guía.
 
-Abre en **Chrome** o **Edge** (Firefox no soporta Web Speech API).
+**URL:** **[http://localhost:4100/test/voice-test-v2.html](http://localhost:4100/test/voice-test-v2.html)**
+
+Abre en **Chrome** o **Edge**.
 
 ### Campos de la interfaz
 
@@ -240,7 +244,7 @@ $callId = "test-$(Get-Date -Format 'HHmmss')"
 function Chat($texto, $desde = $null) {
     $payload = @{ callId = $callId; text = $texto; toNumber = "+15550000001" }
     if ($desde) { $payload.fromNumber = $desde }
-    $r = Invoke-RestMethod -Uri "http://localhost:4000/debug/chat" -Method POST `
+    $r = Invoke-RestMethod -Uri "http://localhost:4100/debug/chat" -Method POST `
          -ContentType "application/json" -Body ($payload | ConvertTo-Json)
     Write-Host "IA: $($r.replyText)" -ForegroundColor Cyan
     return $r
@@ -283,7 +287,7 @@ Invoke-RestMethod `
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | `GET`  | `/health` | Estado del servicio: `llm`, `tts`, `ocr` |
-| `GET`  | `/test/voice-test.html` | 🎤 **Página de pruebas con micrófono** |
+| `GET`  | `/test/voice-test-v2.html` | 🎤 **Página de pruebas con micrófono (WebSocket + Azure Speech SDK)** |
 | `POST` | `/debug/chat` | Diálogo solo texto (sin audio, más rápido) |
 | `POST` | `/debug/voice-chat` | Diálogo + audio TTS (`audioBase64` incluido) |
 | `GET`  | `/debug/play-audio?text=X&lang=es` | Genera MP3 con Azure Speech |
@@ -361,12 +365,12 @@ docker stats blindsbook-ia --no-stream
        docker compose down ; docker compose up -d
 
 [ ] 3. Verificar:
-       Invoke-RestMethod http://localhost:4000/health
+       Invoke-RestMethod http://localhost:4100/health
        → "llm": "azure-openai"  ✅
        → "tts": "azure-speech"  ✅
 
 [ ] 4. Abrir Chrome:
-       http://localhost:4000/test/voice-test.html
+       http://localhost:4100/test/voice-test-v2.html
 
 [ ] 5. Probar los escenarios de esta guía
 ```
@@ -374,7 +378,7 @@ docker stats blindsbook-ia --no-stream
 ---
 ## 16. Guion de Pruebas Paso a Paso (con numeros reales)
 
-> **Instrucciones:** Lee cada guion en orden. Abre `http://localhost:4000/test/voice-test.html`.
+> **Instrucciones:** Lee cada guion en orden. Abre `http://localhost:4100/test/voice-test-v2.html`.
 > Puedes usar **modo Voz** (microfono) o **modo Texto** (escribir).
 > En cada guion encontraras:
 > - **Configuracion:** que poner en los campos antes de iniciar
