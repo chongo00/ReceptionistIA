@@ -14,33 +14,21 @@ export interface EnvConfig {
   blindsbookLoginEmail: string | null;
   blindsbookLoginPassword: string | null;
   twilioNumberToCompanyMap: Map<string, CompanyMapEntry>;
-  aiServiceUrl: string | null;
-  aiServiceApiKey: string | null;
   publicBaseUrl: string | null;
   azureSpeechKey: string | null;
   azureSpeechRegion: string | null;
   azureTtsVoiceEs: string | null;
   azureTtsVoiceEn: string | null;
-  dockerTtsUrl: string | null;
-  ollamaUrl: string | null;
-  ollamaModel: string;
-  // Azure OpenAI (primary LLM)
   azureOpenaiEndpoint: string | null;
   azureOpenaiApiKey: string | null;
   azureOpenaiDeployment: string | null;
   azureOpenaiApiVersion: string;
 }
 
+let _cached: EnvConfig | null = null;
+
 export function loadEnv(): EnvConfig {
-  const port = Number(process.env.PORT || 4000);
-
-  const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN || '';
-  const blindsbookApiBaseUrl =
-    process.env.BLINDSBOOK_API_BASE_URL || 'http://localhost:3000';
-  const blindsbookApiToken = process.env.BLINDSBOOK_API_TOKEN || '';
-
-  const blindsbookLoginEmail = process.env.BLINDSBOOK_LOGIN_EMAIL || null;
-  const blindsbookLoginPassword = process.env.BLINDSBOOK_LOGIN_PASSWORD || null;
+  if (_cached) return _cached;
 
   const twilioNumberToCompanyMap = new Map<string, CompanyMapEntry>();
   const mapJson = process.env.TWILIO_NUMBER_TO_COMPANY_MAP;
@@ -51,56 +39,29 @@ export function loadEnv(): EnvConfig {
         twilioNumberToCompanyMap.set(number, config);
       }
     } catch {
-      // eslint-disable-next-line no-console
-      console.warn('TWILIO_NUMBER_TO_COMPANY_MAP tiene formato JSON inválido');
+      console.warn('TWILIO_NUMBER_TO_COMPANY_MAP has invalid JSON format');
     }
   }
 
-  const aiServiceUrl = process.env.AI_SERVICE_URL || null;
-  const aiServiceApiKey = process.env.AI_SERVICE_API_KEY || null;
-
-  const publicBaseUrl = process.env.PUBLIC_BASE_URL || null;
-
-  const azureSpeechKey = process.env.AZURE_SPEECH_KEY || null;
-  const azureSpeechRegion = process.env.AZURE_SPEECH_REGION || null;
-  const azureTtsVoiceEs = process.env.AZURE_TTS_VOICE_ES || null;
-  const azureTtsVoiceEn = process.env.AZURE_TTS_VOICE_EN || null;
-
-  const dockerTtsUrl = process.env.DOCKER_TTS_URL || null;
-
-  const ollamaUrl = process.env.OLLAMA_URL || null;
-  const ollamaModel = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
-
-  // Azure OpenAI
-  const azureOpenaiEndpoint = process.env.AZURE_OPENAI_ENDPOINT || null;
-  const azureOpenaiApiKey = process.env.AZURE_OPENAI_API_KEY || null;
-  const azureOpenaiDeployment = process.env.AZURE_OPENAI_DEPLOYMENT || null;
-  const azureOpenaiApiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-10-21';
-
-  return {
-    port,
-    twilioAuthToken,
-    twilioValidateSignature:
-      process.env.TWILIO_VALIDATE_SIGNATURE !== 'false',
-    blindsbookApiBaseUrl,
-    blindsbookApiToken,
-    blindsbookLoginEmail,
-    blindsbookLoginPassword,
+  _cached = {
+    port: Number(process.env.PORT || 4000),
+    twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || '',
+    twilioValidateSignature: process.env.TWILIO_VALIDATE_SIGNATURE !== 'false',
+    blindsbookApiBaseUrl: process.env.BLINDSBOOK_API_BASE_URL || 'http://localhost:3000',
+    blindsbookApiToken: process.env.BLINDSBOOK_API_TOKEN || '',
+    blindsbookLoginEmail: process.env.BLINDSBOOK_LOGIN_EMAIL || null,
+    blindsbookLoginPassword: process.env.BLINDSBOOK_LOGIN_PASSWORD || null,
     twilioNumberToCompanyMap,
-    aiServiceUrl,
-    aiServiceApiKey,
-    publicBaseUrl,
-    azureSpeechKey,
-    azureSpeechRegion,
-    azureTtsVoiceEs,
-    azureTtsVoiceEn,
-    dockerTtsUrl,
-    ollamaUrl,
-    ollamaModel,
-    azureOpenaiEndpoint,
-    azureOpenaiApiKey,
-    azureOpenaiDeployment,
-    azureOpenaiApiVersion,
+    publicBaseUrl: process.env.PUBLIC_BASE_URL || null,
+    azureSpeechKey: process.env.AZURE_SPEECH_KEY || null,
+    azureSpeechRegion: process.env.AZURE_SPEECH_REGION || null,
+    azureTtsVoiceEs: process.env.AZURE_TTS_VOICE_ES || null,
+    azureTtsVoiceEn: process.env.AZURE_TTS_VOICE_EN || null,
+    azureOpenaiEndpoint: process.env.AZURE_OPENAI_ENDPOINT || null,
+    azureOpenaiApiKey: process.env.AZURE_OPENAI_API_KEY || null,
+    azureOpenaiDeployment: process.env.AZURE_OPENAI_DEPLOYMENT || null,
+    azureOpenaiApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-10-21',
   };
-}
 
+  return _cached;
+}

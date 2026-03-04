@@ -23,7 +23,7 @@ export async function startServer() {
   const env = loadEnv();
 
   app.use(bodyParser.urlencoded({ extended: false }));
-  app.use(bodyParser.json({ limit: '20mb' })); // 20 MB for base64 OCR images
+  app.use(bodyParser.json({ limit: '20mb' }));
   app.use(cors());
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,7 +45,7 @@ export async function startServer() {
     });
   });
 
-  // Temporary TTS audio for Twilio <Play/>
+  // Serves temporary TTS audio files referenced by Twilio <Play/> verb
   app.get('/tts/:id.mp3', (req, res) => {
     const id = String(req.params.id || '');
     const audio = getAudio(id);
@@ -101,15 +101,13 @@ export async function startServer() {
         try {
           await createAppointment(payload);
         } catch (err) {
-          // eslint-disable-next-line no-console
           console.error('DEBUG: error creando cita en BlindsBook:', err);
         }
       } else {
-        // eslint-disable-next-line no-console
         console.warn('DEBUG: no se crea cita porque customerId es null');
       }
     }
-    
+
     if (result.isFinished) {
       clearConversationState(callId);
     } else {
@@ -119,7 +117,6 @@ export async function startServer() {
     res.json(result);
   });
 
-  // ─── Customer lookup by phone (searches across all configured companies) ───
   app.get('/debug/customer-lookup', async (req, res) => {
     const phone = String(req.query.phone || '').trim();
     if (!phone || phone.length < 3) {
@@ -158,7 +155,6 @@ export async function startServer() {
       }
     }
 
-    // Restore default
     clearTokenOverride();
 
     res.json({
@@ -268,7 +264,7 @@ export async function startServer() {
       return;
     }
     try {
-      // Tier 1: Azure OpenAI Vision (GPT-4o) — high accuracy
+      // Tier 1: Azure OpenAI Vision (GPT-4o) for higher accuracy
       if (isAzureVisionConfigured()) {
         const visionResult = await detectWindowFrameWithVision(image, Number(width), Number(height));
         if (visionResult) {
@@ -278,7 +274,7 @@ export async function startServer() {
         console.warn('[OCR] Azure Vision returned no result, falling back to edge detection');
       }
 
-      // Tier 2: Edge detection (sharp + Laplacian)
+      // Tier 2: Edge detection fallback (sharp + Laplacian)
       const result = await detectWindowFrame(image, Number(width), Number(height));
       if (!result) {
         res.json({ error: 'no_window', message: 'No window frame detected' });
@@ -300,11 +296,7 @@ export async function startServer() {
   }
 
   const port = Number(process.env.PORT || 4000);
-
-  // Create HTTP server and attach WebSocket
   const httpServer = createServer(app);
-  
-  // Setup WebSocket for real-time voice communication
   setupVoiceWebSocket(httpServer);
 
   await new Promise<void>((resolve) => {
@@ -320,7 +312,6 @@ export async function startServer() {
     });
   });
 
-  // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n[Server] ${signal} received — graceful shutdown...`);
     await shutdownVoiceWebSocket();
@@ -335,4 +326,3 @@ export async function startServer() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
-

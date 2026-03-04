@@ -11,9 +11,18 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Temporary Claude working directories
 tmpclaude-*
 
-# Test / debug audio files (keep folder, ignore generated MP3s)
 *.mp3
 !tests/audio/.gitkeep
+
+# Windows null device artifact
+nul
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+*.bak
+*.log

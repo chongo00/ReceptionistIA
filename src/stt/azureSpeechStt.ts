@@ -1,19 +1,5 @@
-/**
- * Azure Speech SDK - Speech-to-Text Service
- * 
- * Uses Microsoft Azure Cognitive Services Speech SDK for professional-grade
- * speech recognition. Much more reliable than browser Web Speech API.
- * 
- * Key features:
- * - Continuous recognition with interim results
- * - Server-side processing (no browser dependency)
- * - Proper silence detection and timeout handling
- * - Support for Spanish and English
- */
-
 import * as sdk from 'microsoft-cognitiveservices-speech-sdk';
 import { loadEnv } from '../config/env.js';
-import { Readable } from 'stream';
 
 export type SpeechLanguage = 'es' | 'en';
 
@@ -53,10 +39,6 @@ function getCredentials(): { key: string; region: string } {
   return { key: _azureKey, region: _azureRegion };
 }
 
-/**
- * Creates a fresh SpeechConfig per recognizer — avoids race conditions
- * when multiple sessions with different languages run concurrently.
- */
 function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number): sdk.SpeechConfig {
   const { key, region } = getCredentials();
   const cfg = sdk.SpeechConfig.fromSubscription(key, region);
@@ -77,10 +59,6 @@ function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number): s
   return cfg;
 }
 
-/**
- * Creates a speech recognizer for continuous recognition from a push stream.
- * Used for real-time audio from WebSocket connections.
- */
 export function createPushStreamRecognizer(
   config: SttConfig
 ): {
@@ -96,8 +74,7 @@ export function createPushStreamRecognizer(
   const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
 
   const recognizer = new sdk.SpeechRecognizer(speechCfg, audioConfig);
-  
-  // Handle interim results (while speaking)
+
   recognizer.recognizing = (_, event) => {
     if (event.result.reason === sdk.ResultReason.RecognizingSpeech) {
       config.onInterim?.({
@@ -107,15 +84,14 @@ export function createPushStreamRecognizer(
       });
     }
   };
-  
-  // Handle final results
+
   recognizer.recognized = (_, event) => {
     if (event.result.reason === sdk.ResultReason.RecognizedSpeech) {
       const detailed = event.result as sdk.SpeechRecognitionResult;
       config.onFinal?.({
         text: event.result.text,
         isFinal: true,
-        confidence: detailed.properties?.getProperty(sdk.PropertyId.SpeechServiceResponse_JsonResult) 
+        confidence: detailed.properties?.getProperty(sdk.PropertyId.SpeechServiceResponse_JsonResult)
           ? JSON.parse(detailed.properties.getProperty(sdk.PropertyId.SpeechServiceResponse_JsonResult))?.NBest?.[0]?.Confidence
           : undefined,
         language: config.language,
@@ -124,14 +100,13 @@ export function createPushStreamRecognizer(
       config.onSilence?.();
     }
   };
-  
-  // Handle errors
+
   recognizer.canceled = (_, event) => {
     if (event.reason === sdk.CancellationReason.Error) {
       config.onError?.(new Error(`Speech recognition error: ${event.errorDetails}`));
     }
   };
-  
+
   return {
     recognizer,
     pushStream,
@@ -156,35 +131,30 @@ export function createPushStreamRecognizer(
   };
 }
 
-/**
- * Recognize speech from a WAV/PCM audio buffer (single-shot recognition).
- * Used for processing complete audio files or recorded segments.
- */
 export async function recognizeFromBuffer(
   audioBuffer: Buffer,
   language: SpeechLanguage = 'es'
 ): Promise<RecognitionResult | null> {
   const speechCfg = createSttConfig(language);
-  
+
   const audioFormat = sdk.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1);
   const pushStream = sdk.AudioInputStream.createPushStream(audioFormat);
-  
-  // Write the buffer to the push stream - convert Buffer to ArrayBuffer
+
   const arrayBuffer = audioBuffer.buffer.slice(
     audioBuffer.byteOffset,
     audioBuffer.byteOffset + audioBuffer.byteLength
   );
   pushStream.write(arrayBuffer as ArrayBuffer);
   pushStream.close();
-  
+
   const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
   const recognizer = new sdk.SpeechRecognizer(speechCfg, audioConfig);
-  
+
   return new Promise((resolve, reject) => {
     recognizer.recognizeOnceAsync(
       (result) => {
         recognizer.close();
-        
+
         if (result.reason === sdk.ResultReason.RecognizedSpeech) {
           resolve({
             text: result.text,
@@ -208,9 +178,6 @@ export async function recognizeFromBuffer(
   });
 }
 
-/**
- * Check if Azure Speech STT is properly configured
- */
 export function isAzureSttConfigured(): boolean {
   const env = loadEnv();
   return Boolean(env.azureSpeechKey && env.azureSpeechRegion);

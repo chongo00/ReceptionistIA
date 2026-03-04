@@ -41,4 +41,3 @@ export function getAudio(id: string): { contentType: string; bytes: Buffer } | n
   }
   return { contentType: found.contentType, bytes: found.bytes };
 }
-

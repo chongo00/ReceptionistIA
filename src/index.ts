@@ -2,8 +2,6 @@ import 'dotenv/config';
 import { startServer } from './server.js';
 
 startServer().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error('Error al iniciar el servidor IA recepcionista:', err);
+  console.error('Failed to start receptionist server:', err);
   process.exit(1);
 });
-

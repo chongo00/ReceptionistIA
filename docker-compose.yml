@@ -1,15 +1,10 @@
-version: '3.8'
-
 services:
-  # BlindsBook Receptionist IA (Node.js + Azure OpenAI + Azure Speech)
   blindsbook-ia:
     build:
       context: .
       dockerfile: Dockerfile.cloud
     ports:
-      # Host 4100 en localhost → Container 4000
-      # Forzamos 127.0.0.1 para evitar restricciones de 0.0.0.0 en Windows
-      - "127.0.0.1:4100:4000"      # App Node.js (host 4100)
+      - "127.0.0.1:4100:4000"
     environment:
       - PORT=4000
       - BLINDSBOOK_API_BASE_URL=${BLINDSBOOK_API_BASE_URL:-http://host.docker.internal:3000}
@@ -20,51 +15,18 @@ services:
       - TWILIO_NUMBER_TO_COMPANY_MAP=${TWILIO_NUMBER_TO_COMPANY_MAP:-}
       - TWILIO_VALIDATE_SIGNATURE=false
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:4100}
-      # Azure OpenAI (primary LLM)
       - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
       - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
       - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o-mini}
       - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-10-21}
-      # Azure Speech (TTS)
       - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
       - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
       - AZURE_TTS_VOICE_ES=${AZURE_TTS_VOICE_ES:-es-MX-DaliaNeural}
       - AZURE_TTS_VOICE_EN=${AZURE_TTS_VOICE_EN:-en-US-JennyNeural}
-      # Ollama fallback (only if running externally)
-      - OLLAMA_URL=${OLLAMA_URL:-}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
-      # Docker TTS (disabled by default — use Azure Speech)
-      - DOCKER_TTS_URL=${DOCKER_TTS_URL:-}
     volumes:
-      # Monta la carpeta public local dentro del contenedor para evitar rebuilds
       - ./public:/app/public:ro
     deploy:
       resources:
         limits:
-          memory: 512M    # Much lighter without Ollama (was 6G)
+          memory: 512M
     restart: unless-stopped
-
-  # Piper TTS (uncomment for separate local TTS)
-  # blindsbook-tts:
-  #   image: blindsbook-tts:latest
-  #   ports:
-  #     - "8000:8000"
-  #   restart: unless-stopped
-  # Note: OCR (POST /ocr/window-frame) is served from blindsbook-ia on internal port 4000.
-  # Drapery Calculator app uses VITE_BLINDSBOOK_IA_URL=http://localhost:4100 en entorno local.
-
-  # Ollama (uncomment ONLY if you need local LLM fallback without Azure OpenAI)
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   ports:
-  #     - "11434:11434"
-  #   volumes:
-  #     - ollama_data:/root/.ollama
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 6G
-  #   restart: unless-stopped
-
-# volumes:
-#   ollama_data:  # Only needed if using Ollama container above

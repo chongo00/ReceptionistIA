@@ -13,7 +13,7 @@ import type {
   ChatMessage,
   ToolDefinition,
   ToolCall,
-} from './ollamaClient.js';
+} from './types.js';
 
 export interface IdentificationAgentResult {
   replyText: string;
@@ -220,7 +220,7 @@ function cleanMarkers(text: string): string {
 }
 
 const MAX_TOOL_CALLS_PER_TURN = 3;
-const MAX_TOOL_CALL_LOOPS = 3; // Max tool call loops per turn
+const MAX_TOOL_CALL_LOOPS = 3;
 
 export async function runIdentificationAgent(
   state: ConversationState,

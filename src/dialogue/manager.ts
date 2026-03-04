@@ -10,6 +10,8 @@ import { parseDateTimeFromText, mergeTimeIntoDate } from './dateParser.js';
 import {
   pick,
   maybeFiller,
+  naturalConfirmation,
+  naturalTransition,
   GREETINGS_ES, GREETINGS_EN,
   HOW_CAN_HELP_ES, HOW_CAN_HELP_EN,
   PERFECT_ES, PERFECT_EN,
@@ -23,11 +25,10 @@ export interface DialogueTurnResult {
   state: ConversationState;
   replyText: string;
   isFinished: boolean;
-  /** Synthesized MP3 audio (only populated by endpoints that request it) */
   audioBase64?: string;
 }
 
-// In-memory store; use Redis in production
+// In-memory store — swap with Redis for multi-instance production
 const conversationStore = new Map<string, ConversationState>();
 
 export function getConversationState(callId: string): ConversationState {
@@ -39,10 +40,7 @@ export function getConversationState(callId: string): ConversationState {
   return state;
 }
 
-export function setConversationState(
-  callId: string,
-  state: ConversationState,
-): void {
+export function setConversationState(callId: string, state: ConversationState): void {
   conversationStore.set(callId, state);
 }
 
@@ -57,7 +55,7 @@ function typeLabel(type: number | null, lang: 'es' | 'en'): string {
 
 function customerDisplayName(match: CustomerMatch): string {
   const parts = [match.firstName, match.lastName].filter(Boolean);
-  return parts.join(' ') || match.companyName || `Cliente #${match.id}`;
+  return parts.join(' ') || match.companyName || `Customer #${match.id}`;
 }
 
 function phoneLastDigits(phone: string | null, digits = 4): string {
@@ -66,8 +64,19 @@ function phoneLastDigits(phone: string | null, digits = 4): string {
   return clean.length > digits ? clean.slice(-digits) : clean;
 }
 
-const MAX_IDENTIFICATION_ATTEMPTS = 3;
-const MAX_DISAMBIGUATION_DISPLAY = 3;
+const MAX_ID_ATTEMPTS = 3;
+const MAX_DISAMBIG_DISPLAY = 3;
+const LLM_STEP_TIMEOUT_MS = 5000;
+const SEARCH_STEP_TIMEOUT_MS = 6000;
+const PHONE_LOOKUP_TIMEOUT_MS = 18000;
+
+// Race a promise with a timeout, returning fallback on timeout
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
 
 export function handleUserInput(
   callId: string,
@@ -80,6 +89,8 @@ export function handleUserInput(
 
   const run = async (): Promise<DialogueTurnResult> => {
     switch (state.step) {
+
+      // ── Language selection ──────────────────────────────────────────
       case 'askLanguage': {
         const lower = trimmed.toLowerCase();
         if (trimmed === '1' || lower.includes('español') || lower.includes('spanish')) {
@@ -87,94 +98,58 @@ export function handleUserInput(
         } else if (trimmed === '2' || lower.includes('english') || lower.includes('inglés') || lower.includes('ingles')) {
           state = { ...state, language: 'en', step: 'identifyByCallerId' };
         } else {
-          return {
-            state,
-            replyText:
-              'Para español, presione 1. For English, press 2.',
-            isFinished: false,
-          };
+          return { state, replyText: 'Para español, presione 1. For English, press 2.', isFinished: false };
         }
-
         return run();
       }
 
+      // ── Caller ID lookup ───────────────────────────────────────────
       case 'identifyByCallerId': {
         const phone = state.callerPhone;
-        const startTime = Date.now();
 
         if (!phone) {
           state = { ...state, step: 'askCustomerName' };
           return {
             state,
             replyText: t(
-              '¡Bienvenido a BlindsBook! Soy su asistente virtual. ¿Me podría dar su nombre completo o el número de teléfono con el que se registró?',
-              'Welcome to BlindsBook! I\'m your virtual assistant. Could you give me your full name or the phone number you registered with?',
+              '¡Hola! Bienvenido a BlindsBook, soy Sara, tu asistente virtual. ¿Me podrías dar tu nombre completo o el número de teléfono con el que te registraste?',
+              "Hey there! Welcome to BlindsBook, I'm Sarah, your virtual assistant. Could you give me your full name or the phone number you registered with?",
             ),
             isFinished: false,
           };
         }
 
-        console.log(`[Identify] Starting customer lookup by phone: ${phone}`);
+        console.log(`[Identify] Phone lookup: ${phone}`);
 
         let matches: CustomerMatch[] = [];
         try {
-          // Use a race with timeout to avoid blocking too long
-          // API is slow (~6s per query), so allow enough time for parallel variant searches
-          const LOOKUP_TIMEOUT_MS = 18000; // 18 seconds max for phone lookup (allows for parallel variant searches)
-          
-          const searchPromise = findCustomersByPhone(phone);
-          const timeoutPromise = new Promise<CustomerMatch[]>((_, reject) => 
-            setTimeout(() => reject(new Error('Phone lookup timeout')), LOOKUP_TIMEOUT_MS)
-          );
-          
-          matches = await Promise.race([searchPromise, timeoutPromise]);
-          
-          const elapsed = Date.now() - startTime;
-          console.log(`[Identify] Phone lookup completed in ${elapsed}ms: ${matches.length} matches`);
+          matches = await withTimeout(findCustomersByPhone(phone), PHONE_LOOKUP_TIMEOUT_MS, []);
+          console.log(`[Identify] Phone lookup: ${matches.length} matches`);
         } catch (err) {
-          const elapsed = Date.now() - startTime;
-          console.warn(`[Identify] Phone lookup failed/timeout after ${elapsed}ms:`, err);
-          // On timeout/error, proceed to ask for name instead of hanging
+          console.warn('[Identify] Phone lookup failed:', err);
         }
 
         if (matches.length === 1) {
           const match = matches[0]!;
           const name = customerDisplayName(match);
-          state = {
-            ...state,
-            customerId: match.id,
-            customerConfirmedName: name,
-            customerNameSpoken: name,
-            step: 'greeting',
-          };
-          const greeting = t(
-            pick(GREETINGS_ES).replace('{name}', name),
-            pick(GREETINGS_EN).replace('{name}', name),
-          );
-          const helpQ = t(pick(HOW_CAN_HELP_ES), pick(HOW_CAN_HELP_EN));
-          return {
-            state,
-            replyText: `${greeting} ${helpQ}`,
-            isFinished: false,
-          };
+          state = { ...state, customerId: match.id, customerConfirmedName: name, customerNameSpoken: name, step: 'greeting' };
+          const greeting = t(pick(GREETINGS_ES).replace('{name}', name), pick(GREETINGS_EN).replace('{name}', name));
+          return { state, replyText: `${greeting} ${t(pick(HOW_CAN_HELP_ES), pick(HOW_CAN_HELP_EN))}`, isFinished: false };
         }
 
         if (matches.length > 1 && matches.length <= 5) {
           state = { ...state, customerMatches: matches, step: 'disambiguateCustomer' };
-          const nameSummary = matches
-            .slice(0, MAX_DISAMBIGUATION_DISPLAY)
+          const listing = matches.slice(0, MAX_DISAMBIG_DISPLAY)
             .map((m, i) => {
               const name = customerDisplayName(m);
-              const phoneTail = phoneLastDigits(m.phone);
-              return `${i + 1}. ${name}${phoneTail ? ` (tel. ***${phoneTail})` : ''}`;
-            })
-            .join('\n');
-
+              const tail = phoneLastDigits(m.phone);
+              return `${i + 1}. ${name}${tail ? ` (tel. ***${tail})` : ''}`;
+            }).join('\n');
           return {
             state,
             replyText: t(
-              `Encontré varias cuentas con ese número:\n${nameSummary}\n¿Podría decirme su nombre?`,
-              `I found multiple accounts with that number:\n${nameSummary}\nCould you tell me your name?`,
+              `Encontré varias cuentas con ese número:\n${listing}\n¿Me podrías decir tu nombre para saber cuál eres?`,
+              `I found a few accounts with that number:\n${listing}\nCould you tell me your name so I know which one is you?`,
             ),
             isFinished: false,
           };
@@ -184,49 +159,49 @@ export function handleUserInput(
         return {
           state,
           replyText: t(
-            '¡Bienvenido a BlindsBook! Soy su asistente virtual. ¿Me podría dar su nombre completo o el número con el que se registró?',
-            "Welcome to BlindsBook! I'm your virtual assistant. Could you give me your full name or the phone number you registered with?",
+            '¡Hola! Bienvenido a BlindsBook, soy Sara. ¿Me podrías dar tu nombre completo o el número con el que te registraste?',
+            "Hey! Welcome to BlindsBook, I'm Sarah. Could you give me your full name or the phone number you registered with?",
           ),
           isFinished: false,
         };
       }
 
+      // ── Disambiguate multiple customers ────────────────────────────
       case 'disambiguateCustomer': {
         if (!trimmed) {
           return {
             state,
             replyText: t(
-              `${pick(SORRY_ES)}, no alcancé a escuchar su respuesta. ¿Podría decirme su nombre completo?`,
-              `${pick(SORRY_EN)}, I didn't catch your response. Could you tell me your full name?`,
+              `${pick(SORRY_ES)}, no te escuché bien. ¿Me podrías decir tu nombre completo?`,
+              `${pick(SORRY_EN)}, I didn't quite catch that. Could you tell me your full name?`,
             ),
             isFinished: false,
           };
         }
 
-        // Try LLM to understand choice (number or name)
-        const llmDisambig = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmResult = await llmProcessStep(state, trimmed, buildStepContext(state));
 
         let numChoice = NaN;
         let nameMatch: CustomerMatch | undefined;
 
-        if (llmDisambig?.data?.choiceNumber != null) {
-          numChoice = Number(llmDisambig.data.choiceNumber);
-        } else if (llmDisambig?.data?.nameSpoken) {
-          const spokenName = String(llmDisambig.data.nameSpoken).toLowerCase();
+        if (llmResult?.data?.choiceNumber != null) {
+          numChoice = Number(llmResult.data.choiceNumber);
+        } else if (llmResult?.data?.nameSpoken) {
+          const spoken = String(llmResult.data.nameSpoken).toLowerCase();
           nameMatch = state.customerMatches.find((m) => {
-            const fullName = customerDisplayName(m).toLowerCase();
-            return fullName.includes(spokenName) || spokenName.includes(fullName);
+            const full = customerDisplayName(m).toLowerCase();
+            return full.includes(spoken) || spoken.includes(full);
           });
         }
 
+        // Rule-based fallback
         if (isNaN(numChoice)) {
-          // Rule-based fallback: try parsing number or name match
           numChoice = parseInt(trimmed, 10);
           if (isNaN(numChoice) && !nameMatch) {
             const lower = trimmed.toLowerCase();
             nameMatch = state.customerMatches.find((m) => {
-              const fullName = customerDisplayName(m).toLowerCase();
-              return fullName.includes(lower) || lower.includes(fullName);
+              const full = customerDisplayName(m).toLowerCase();
+              return full.includes(lower) || lower.includes(full);
             });
           }
         }
@@ -234,19 +209,12 @@ export function handleUserInput(
         if (numChoice >= 1 && numChoice <= state.customerMatches.length) {
           const match = state.customerMatches[numChoice - 1]!;
           const name = customerDisplayName(match);
-          state = {
-            ...state,
-            customerId: match.id,
-            customerConfirmedName: name,
-            customerNameSpoken: name,
-            step: 'greeting',
-            customerMatches: [],
-          };
+          state = { ...state, customerId: match.id, customerConfirmedName: name, customerNameSpoken: name, step: 'greeting', customerMatches: [] };
           return {
             state,
-            replyText: llmDisambig?.reply || t(
-              `${pick(PERFECT_ES)}, ${name}. ${pick(HOW_CAN_HELP_ES)}`,
-              `${pick(PERFECT_EN)}, ${name}. ${pick(HOW_CAN_HELP_EN)}`,
+            replyText: llmResult?.reply || t(
+              `${naturalConfirmation('es')} ${name}. ${pick(HOW_CAN_HELP_ES)}`,
+              `${naturalConfirmation('en')}, ${name}. ${pick(HOW_CAN_HELP_EN)}`,
             ),
             isFinished: false,
           };
@@ -254,127 +222,78 @@ export function handleUserInput(
 
         if (nameMatch) {
           const name = customerDisplayName(nameMatch);
-          state = {
-            ...state,
-            customerId: nameMatch.id,
-            customerConfirmedName: name,
-            customerNameSpoken: name,
-            customerMatches: [],
-            step: 'confirmCustomerIdentity',
-          };
+          state = { ...state, customerId: nameMatch.id, customerConfirmedName: name, customerNameSpoken: name, customerMatches: [], step: 'confirmCustomerIdentity' };
           return run();
         }
 
-        // If LLM answered off-topic, return its reply
-        if (llmDisambig && !llmDisambig.data.choiceNumber && !llmDisambig.data.nameSpoken) {
-          return { state, replyText: llmDisambig.reply, isFinished: false };
+        if (llmResult && !llmResult.data.choiceNumber && !llmResult.data.nameSpoken) {
+          return { state, replyText: llmResult.reply, isFinished: false };
         }
 
-        state = {
-          ...state,
-          customerNameSpoken: trimmed,
-          customerMatches: [],
-          step: 'askCustomerName',
-        };
+        state = { ...state, customerNameSpoken: trimmed, customerMatches: [], step: 'askCustomerName' };
         return run();
       }
 
+      // ── Ask customer name / search ─────────────────────────────────
       case 'askCustomerName': {
         if (!trimmed) {
           return {
             state,
             replyText: t(
-              `${pick(SORRY_ES)}, no alcancé a escuchar. ¿Me podría dar su nombre completo o el teléfono con el que se registró?`,
-              `${pick(SORRY_EN)}, I didn't quite catch that. Could you give me your full name or the phone number you registered with?`,
+              `${pick(SORRY_ES)}, no te escuché. ¿Me podrías dar tu nombre completo o el teléfono con el que te registraste?`,
+              `${pick(SORRY_EN)}, I didn't catch that. Could you give me your full name or the phone number you registered with?`,
             ),
             isFinished: false,
           };
         }
 
-        const startTime = Date.now();
         console.log(`[CustomerName] Processing: "${trimmed}"`);
 
-        // ── Launch LLM extraction and raw-text API search IN PARALLEL ────────
-        // Use aggressive timeout on LLM to avoid blocking the user too long
-        const LLM_TIMEOUT_MS = 5000;
-        const SEARCH_TIMEOUT_MS = 6000;
-        
-        const llmPromise = llmProcessStep(state, trimmed, buildStepContext(state))
-          .catch(() => null);
-        const llmWithTimeout = Promise.race([
-          llmPromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), LLM_TIMEOUT_MS))
+        // Launch LLM + API search in parallel for speed
+        const [llmResult, rawMatches] = await Promise.all([
+          withTimeout(llmProcessStep(state, trimmed, buildStepContext(state)).catch(() => null), LLM_STEP_TIMEOUT_MS, null),
+          withTimeout(findCustomersBySearch(trimmed, 5).catch(() => [] as CustomerMatch[]), SEARCH_STEP_TIMEOUT_MS, []),
         ]);
-        
-        const searchPromise = findCustomersBySearch(trimmed, 5)
-          .catch(() => [] as CustomerMatch[]);
-        const searchWithTimeout = Promise.race([
-          searchPromise,
-          new Promise<CustomerMatch[]>((resolve) => setTimeout(() => resolve([]), SEARCH_TIMEOUT_MS))
-        ]);
-        
-        const [llmName, rawMatches] = await Promise.all([llmWithTimeout, searchWithTimeout]);
-        
-        const elapsed = Date.now() - startTime;
-        console.log(`[CustomerName] Parallel lookup completed in ${elapsed}ms: LLM=${llmName ? 'OK' : 'timeout/null'}, matches=${rawMatches.length}`);
 
-        const searchText = (llmName?.data?.searchQuery as string) || trimmed;
-
+        const searchText = (llmResult?.data?.searchQuery as string) || trimmed;
         state = { ...state, identificationAttempts: state.identificationAttempts + 1 };
 
-        // If LLM detected off-topic and couldn't extract searchQuery, show its reply
-        if (llmName && !llmName.data.searchQuery) {
-          return { state, replyText: llmName.reply, isFinished: false };
+        // If LLM detected off-topic (no search query extracted), use its reply
+        if (llmResult && !llmResult.data.searchQuery) {
+          return { state, replyText: llmResult.reply, isFinished: false };
         }
 
-        // Use raw matches if searchText === trimmed, otherwise re-query with refined term
+        // Use raw matches or re-query with LLM-refined term
         let matches: CustomerMatch[] = rawMatches;
         if (searchText.toLowerCase() !== trimmed.toLowerCase() && rawMatches.length === 0) {
-          try {
-            const refinedSearch = findCustomersBySearch(searchText, 5);
-            const refinedWithTimeout = Promise.race([
-              refinedSearch,
-              new Promise<CustomerMatch[]>((resolve) => setTimeout(() => resolve([]), SEARCH_TIMEOUT_MS))
-            ]);
-            matches = await refinedWithTimeout;
-          } catch {
-            matches = rawMatches;
-          }
+          matches = await withTimeout(findCustomersBySearch(searchText, 5).catch(() => []), SEARCH_STEP_TIMEOUT_MS, []);
         }
 
         if (matches.length === 1) {
           const match = matches[0]!;
-          state = {
-            ...state,
-            customerMatches: [match],
-            customerNameSpoken: searchText,
-            step: 'confirmCustomerIdentity',
-          };
+          state = { ...state, customerMatches: [match], customerNameSpoken: searchText, step: 'confirmCustomerIdentity' };
           return run();
         }
 
         if (matches.length > 1) {
           state = { ...state, customerMatches: matches, customerNameSpoken: searchText, step: 'disambiguateCustomer' };
-          const nameSummary = matches
-            .slice(0, MAX_DISAMBIGUATION_DISPLAY)
+          const listing = matches.slice(0, MAX_DISAMBIG_DISPLAY)
             .map((m, i) => {
               const name = customerDisplayName(m);
-              const phoneTail = phoneLastDigits(m.phone);
-              return `${i + 1}. ${name}${phoneTail ? ` (tel. ***${phoneTail})` : ''}`;
-            })
-            .join('\n');
-
+              const tail = phoneLastDigits(m.phone);
+              return `${i + 1}. ${name}${tail ? ` (tel. ***${tail})` : ''}`;
+            }).join('\n');
           return {
             state,
             replyText: t(
-              `Encontré varios clientes con ese dato:\n${nameSummary}\n¿Cuál es usted? Puede decirme el número o su nombre completo.`,
-              `I found several customers matching that:\n${nameSummary}\nWhich one are you? You can tell me the number or your full name.`,
+              `Encontré varios clientes con ese dato:\n${listing}\n¿Cuál eres tú? Puedes decirme el número o tu nombre completo.`,
+              `I found a few customers matching that:\n${listing}\nWhich one are you? You can tell me the number or your full name.`,
             ),
             isFinished: false,
           };
         }
 
-        if (state.identificationAttempts >= MAX_IDENTIFICATION_ATTEMPTS) {
+        if (state.identificationAttempts >= MAX_ID_ATTEMPTS) {
           state = { ...state, step: 'llmFallback', customerNameSpoken: searchText };
           return run();
         }
@@ -382,13 +301,14 @@ export function handleUserInput(
         return {
           state,
           replyText: t(
-            `No encontré a "${searchText}" en el sistema. ¿Podría intentar con otro nombre, teléfono o email?`,
-            `I couldn't find "${searchText}" in the system. Could you try with another name, phone number, or email?`,
+            `Hmm, no encontré "${searchText}" en el sistema. ¿Podrías intentar con otro nombre, teléfono o email?`,
+            `Hmm, I couldn't find "${searchText}" in our system. Could you try a different name, phone number, or email?`,
           ),
           isFinished: false,
         };
       }
 
+      // ── Confirm identified customer ────────────────────────────────
       case 'confirmCustomerIdentity': {
         const match = state.customerMatches[0];
         if (!match) {
@@ -398,49 +318,39 @@ export function handleUserInput(
 
         const name = customerDisplayName(match);
 
+        // First time entering this step — ask the question
         if (!trimmed) {
           return {
             state,
             replyText: t(
-              `Encontré a ${name} en el sistema. ¿Es usted?`,
+              `Encontré a ${name} en el sistema. ¿Eres tú?`,
               `I found ${name} in the system. Is that you?`,
             ),
             isFinished: false,
           };
         }
 
-        // Try LLM for natural yes/no + off-topic handling
-        const llmConfirmId = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmConfirm = await llmProcessStep(state, trimmed, buildStepContext(state));
         let isYes = false;
         let isNo = false;
 
-        if (llmConfirmId?.data?.confirmed === true) {
+        if (llmConfirm?.data?.confirmed === true) {
           isYes = true;
-        } else if (llmConfirmId?.data?.confirmed === false) {
+        } else if (llmConfirm?.data?.confirmed === false) {
           isNo = true;
         } else {
-          // Rule-based fallback
           const lower = trimmed.toLowerCase();
-          isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
-            || lower.includes('correcto') || lower.includes('correct') || lower.includes('ok')
-            || lower.includes('soy yo') || lower.includes("that's me") || lower.includes('exacto');
-          isNo = lower.includes('no') || lower.includes('not me') || lower.includes('otro');
+          isYes = /\b(s[ií]|yes|correct[oa]?|ok|soy yo|that'?s me|exacto|afirmativo)\b/.test(lower);
+          isNo = /\b(no|not me|otr[oa]|nope)\b/.test(lower);
         }
 
         if (isYes) {
-          state = {
-            ...state,
-            customerId: match.id,
-            customerConfirmedName: name,
-            customerNameSpoken: name,
-            customerMatches: [],
-            step: 'greeting',
-          };
+          state = { ...state, customerId: match.id, customerConfirmedName: name, customerNameSpoken: name, customerMatches: [], step: 'greeting' };
           return {
             state,
             replyText: t(
-              `${pick(PERFECT_ES)}, ${name}. ${pick(HOW_CAN_HELP_ES)}`,
-              `${pick(PERFECT_EN)}, ${name}. ${pick(HOW_CAN_HELP_EN)}`,
+              `${naturalConfirmation('es')} ${name}! ${pick(HOW_CAN_HELP_ES)}`,
+              `${naturalConfirmation('en')}, ${name}! ${pick(HOW_CAN_HELP_EN)}`,
             ),
             isFinished: false,
           };
@@ -451,18 +361,14 @@ export function handleUserInput(
             ...state,
             customerMatches: [],
             identificationAttempts: state.identificationAttempts + 1,
-            step: state.identificationAttempts >= MAX_IDENTIFICATION_ATTEMPTS - 1 ? 'llmFallback' : 'askCustomerName',
+            step: state.identificationAttempts >= MAX_ID_ATTEMPTS - 1 ? 'llmFallback' : 'askCustomerName',
           };
-
-          if (state.step === 'llmFallback') {
-            return run();
-          }
-
+          if (state.step === 'llmFallback') return run();
           return {
             state,
             replyText: t(
-              `${pick(SORRY_ES)} la confusión. ¿Podría darme su nombre exacto como aparece registrado?`,
-              `${pick(SORRY_EN)} for the confusion. Could you give me your exact name as registered?`,
+              `${pick(SORRY_ES)} la confusión. ¿Me podrías dar tu nombre exacto como aparece registrado?`,
+              `${pick(SORRY_EN)} for the mix-up. Could you give me your exact name as it's registered?`,
             ),
             isFinished: false,
           };
@@ -470,14 +376,12 @@ export function handleUserInput(
 
         return {
           state,
-          replyText: t(
-            `¿Es usted ${name}? Diga "sí" o "no".`,
-            `Are you ${name}? Say "yes" or "no".`,
-          ),
+          replyText: t(`¿Eres ${name}? Dime "sí" o "no".`, `Are you ${name}? Just say "yes" or "no".`),
           isFinished: false,
         };
       }
 
+      // ── LLM agent fallback for identification ──────────────────────
       case 'llmFallback': {
         const isFirstEntry = state.llmConversationHistory.length === 0;
         const userInput = isFirstEntry ? '' : trimmed;
@@ -486,14 +390,13 @@ export function handleUserInput(
         try {
           result = await runIdentificationAgent(state, userInput);
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.error('LLM agent error:', err);
+          console.error('[LLM Agent] Error:', err);
           state = { ...state, step: 'askCustomerName' };
           return {
             state,
             replyText: t(
-              'Disculpe, estoy teniendo problemas técnicos. ¿Me podría dar su nombre completo para registrarlo como cliente nuevo?',
-              "I'm sorry, I'm having technical issues. Could you give me your full name so I can register you as a new customer?",
+              'Ay, disculpa, estoy teniendo un problema técnico. ¿Me podrías dar tu nombre completo para registrarte como cliente nuevo?',
+              "Oh, sorry about that — I'm having a technical hiccup. Could you give me your full name so I can register you as a new customer?",
             ),
             isFinished: false,
           };
@@ -506,8 +409,8 @@ export function handleUserInput(
             return {
               state: { ...state, step: 'completed' },
               replyText: result.replyText || t(
-                'No pude identificarlo. Lo voy a transferir con un miembro del equipo. Gracias por su paciencia.',
-                "I couldn't identify you. I'll transfer you to a team member. Thank you for your patience.",
+                'No logré identificarte, pero no te preocupes. Te voy a pasar con un compañero del equipo que te puede ayudar directamente. Gracias por tu paciencia.',
+                "I wasn't able to find your account, but don't worry. I'll connect you with a team member who can help directly. Thanks for your patience.",
               ),
               isFinished: true,
             };
@@ -515,156 +418,103 @@ export function handleUserInput(
 
           if (result.customerId) {
             const name = result.customerName || state.customerNameSpoken || '';
-            state = {
-              ...state,
-              customerId: result.customerId,
-              customerConfirmedName: name,
-              customerNameSpoken: name,
-              llmConversationHistory: [],
-              step: 'greeting',
-            };
+            state = { ...state, customerId: result.customerId, customerConfirmedName: name, customerNameSpoken: name, llmConversationHistory: [], step: 'greeting' };
             return {
               state,
               replyText: result.replyText || t(
-                `¡Listo! ${name}, ¿en qué puedo ayudarle hoy?`,
-                `All set! ${name}, how can I help you today?`,
+                `¡Te encontré, ${name}! ¿En qué te puedo ayudar hoy?`,
+                `Found you, ${name}! What can I help you with today?`,
               ),
               isFinished: false,
             };
           }
         }
 
-        return {
-          state,
-          replyText: result.replyText,
-          isFinished: false,
-        };
+        return { state, replyText: result.replyText, isFinished: false };
       }
 
+      // ── Greeting (customer identified, ask what they need) ─────────
       case 'greeting': {
-        // If user already said something, try LLM to understand intent
         if (trimmed) {
           const llm = await llmProcessStep(state, trimmed, buildStepContext(state));
-          
-          // Check if user already mentioned the type AND date in one sentence
-          // e.g., "Quiero una cita de reparación para mañana"
+
+          // User may have mentioned type + date in one sentence
           if (llm && llm.data.appointmentType != null) {
             const aType = Number(llm.data.appointmentType);
             if ([0, 1, 2].includes(aType)) {
               state = { ...state, type: aType as 0 | 1 | 2, askedAboutType: true };
-              
-              // Check if they also mentioned a date
+
               if (llm.data.dateText) {
                 const parsed = parseDateTimeFromText(llm.data.dateText as string, state.language);
                 if (parsed) {
                   state = { ...state, startDateISO: parsed.iso, askedAboutDate: true };
-                  if (parsed.hasTime) {
-                    state = { ...state, step: 'askDuration' };
-                  } else {
-                    state = { ...state, step: 'askTime' };
-                  }
+                  state = { ...state, step: parsed.hasTime ? 'askDuration' : 'askTime' };
                   return { state, replyText: llm.reply, isFinished: false };
                 }
               }
-              
+
               state = { ...state, step: 'askDate' };
               return { state, replyText: llm.reply, isFinished: false };
             }
           }
-          
-          if (llm && llm.data.wantsAppointment) {
-            // User wants appointment but didn't specify type
+
+          if (llm?.data.wantsAppointment) {
             state = { ...state, step: 'askType', askedAboutType: true };
-            // Only ask about type if we haven't already
             let reply = llm.reply;
-            if (!state.askedAboutType) {
-              const hasTypeQuestion = reply.toLowerCase().includes('cotización') || 
-                                     reply.toLowerCase().includes('instalación') || 
-                                     reply.toLowerCase().includes('reparación') ||
-                                     reply.toLowerCase().includes('quote') ||
-                                     reply.toLowerCase().includes('installation') ||
-                                     reply.toLowerCase().includes('repair');
-              if (!hasTypeQuestion) {
-                reply += ' ' + t(
-                  '¿Es para cotización, instalación o reparación?',
-                  'Is this for a quote, installation, or repair?'
-                );
-              }
+            const mentionsOptions = /cotización|instalación|reparación|quote|installation|repair/i.test(reply);
+            if (!mentionsOptions) {
+              reply += ' ' + t('¿Es para cotización, instalación o reparación?', 'Is this for a quote, installation, or repair?');
             }
             return { state, replyText: reply, isFinished: false };
           }
-          
+
           if (llm) {
-            const mentionsType = llm.reply.toLowerCase().includes('cotización') || 
-                                 llm.reply.toLowerCase().includes('instalación') ||
-                                 llm.reply.toLowerCase().includes('quote') ||
-                                 llm.reply.toLowerCase().includes('installation');
-            if (mentionsType) {
-              state = { ...state, step: 'askType', askedAboutType: true };
-            }
+            const hintType = /cotización|instalación|quote|installation/i.test(llm.reply);
+            if (hintType) state = { ...state, step: 'askType', askedAboutType: true };
             return { state, replyText: llm.reply, isFinished: false };
           }
-          
+
           state = { ...state, step: 'askType' };
           return run();
         }
-        
-        // No user input yet — proactively ask about appointment type
-        // Mark that we're about to ask, so we don't repeat it
+
+        // No input yet — proactively move to type selection
         state = { ...state, step: 'askType', askedAboutType: true };
-        const replyText = t(
-          `${maybeFiller('es')}Con mucho gusto le ayudaré. ¿Qué tipo de cita necesita: cotización, instalación o reparación?`,
-          `${maybeFiller('en')}I'd be happy to help. What type of appointment do you need: quote, installation, or repair?`,
-        );
-        return { state, replyText, isFinished: false };
+        return {
+          state,
+          replyText: t(
+            `${maybeFiller('es')}Con gusto te ayudo. ¿Qué tipo de cita necesitas: cotización, instalación o reparación?`,
+            `${maybeFiller('en')}Happy to help! What kind of appointment do you need: quote, installation, or repair?`,
+          ),
+          isFinished: false,
+        };
       }
 
+      // ── Ask appointment type ───────────────────────────────────────
       case 'askType': {
-        // Handle empty input (silence) - be more human about it
         if (!trimmed) {
           state = { ...state, silenceCount: (state.silenceCount || 0) + 1 };
-          
-          // First silence: gentle prompt
+
           if (state.silenceCount === 1) {
-            return {
-              state,
-              replyText: t(
-                '¿Me escucha? ¿Qué tipo de cita necesita?',
-                'Are you there? What type of appointment do you need?',
-              ),
-              isFinished: false,
-            };
+            return { state, replyText: t('¿Sigues ahí? ¿Qué tipo de cita necesitas?', 'Still there? What type of appointment do you need?'), isFinished: false };
           }
-          
-          // Second silence: offer options
           if (state.silenceCount === 2) {
-            return {
-              state,
-              replyText: t(
-                'Tenemos cotización, instalación o reparación. ¿Cuál prefiere?',
-                'We have quote, installation, or repair. Which would you like?',
-              ),
-              isFinished: false,
-            };
+            return { state, replyText: t('Tenemos cotización, instalación y reparación. ¿Cuál te interesa?', 'We offer quotes, installations, and repairs. Which one are you looking for?'), isFinished: false };
           }
-          
-          // Third+ silence: remind about text option
           return {
             state,
             replyText: t(
-              'Si tiene problemas con el audio, puede escribirme. Dígame el tipo de cita cuando esté listo.',
-              'If you\'re having audio issues, you can type to me. Let me know the appointment type when ready.',
+              'Si tienes problemas de audio, puedes escribirme. Estoy aquí cuando estés listo.',
+              "If you're having audio issues, you can type to me. I'm here whenever you're ready.",
             ),
             isFinished: false,
           };
         }
-        
-        // Reset silence count when user speaks
+
         state = { ...state, silenceCount: 0 };
 
-        // Try LLM first for natural understanding
         const llmType = await llmProcessStep(state, trimmed, buildStepContext(state));
-        if (llmType && llmType.data.appointmentType != null) {
+        if (llmType?.data?.appointmentType != null) {
           const aType = Number(llmType.data.appointmentType);
           if ([0, 1, 2].includes(aType)) {
             state = { ...state, type: aType as 0 | 1 | 2, step: 'askDate' };
@@ -672,17 +522,9 @@ export function handleUserInput(
           }
         }
         if (llmType) {
-          // LLM understood but couldn't extract type — make sure it asked again
-          // If LLM reply doesn't include the options, add them
           let reply = llmType.reply;
-          const asksForType = reply.includes('cotización') || reply.includes('instalación') || 
-                             reply.includes('reparación') || reply.includes('quote') || 
-                             reply.includes('installation') || reply.includes('repair');
-          if (!asksForType) {
-            reply += ' ' + t(
-              '¿Es para cotización, instalación o reparación?',
-              'Is this for a quote, installation, or repair?'
-            );
+          if (!/cotización|instalación|reparación|quote|installation|repair/i.test(reply)) {
+            reply += ' ' + t('¿Es cotización, instalación o reparación?', 'Is this a quote, installation, or repair?');
           }
           return { state, replyText: reply, isFinished: false };
         }
@@ -690,63 +532,61 @@ export function handleUserInput(
         // Rule-based fallback
         const lower = trimmed.toLowerCase();
         let typeText = '';
-        if (lower.includes('coti') || lower.includes('quote') || lower.includes('precio') || lower.includes('price')) {
+        if (/coti|quote|precio|price/.test(lower)) {
           state = { ...state, type: 0, step: 'askDate' };
           typeText = t('cotización', 'quote');
-        } else if (lower.includes('instal') || lower.includes('nueva') || lower.includes('new')) {
+        } else if (/instal|nueva|new/.test(lower)) {
           state = { ...state, type: 1, step: 'askDate' };
           typeText = t('instalación', 'installation');
-        } else if (lower.includes('repar') || lower.includes('repair') || lower.includes('arregl') || lower.includes('fix')) {
+        } else if (/repar|repair|arregl|fix/.test(lower)) {
           state = { ...state, type: 2, step: 'askDate' };
           typeText = t('reparación', 'repair');
         } else {
-          // More helpful fallback — explain the options
           return {
             state,
             replyText: t(
-              `Entiendo. Déjeme explicarle las opciones: una COTIZACIÓN es para ver precios sin compromiso, una INSTALACIÓN es para poner cortinas nuevas, y una REPARACIÓN es para arreglar cortinas existentes. ¿Cuál de estas necesita?`,
-              `I understand. Let me explain the options: a QUOTE is to see pricing without commitment, an INSTALLATION is to put up new blinds, and a REPAIR is to fix existing blinds. Which of these do you need?`,
+              'Déjame explicarte: una COTIZACIÓN es para ver precios sin compromiso, una INSTALACIÓN para cortinas nuevas, y una REPARACIÓN para arreglar las que ya tienes. ¿Cuál necesitas?',
+              "Let me break it down: a QUOTE is to check pricing with no commitment, an INSTALLATION is for new blinds, and a REPAIR is to fix existing ones. Which do you need?",
             ),
             isFinished: false,
           };
         }
 
-        const customerName = state.customerConfirmedName || state.customerNameSpoken || '';
-        const replyText = t(
-          `${pick(PERFECT_ES)}${customerName ? `, ${customerName}` : ''}. Agendaremos una cita de ${typeText}. ¿Para qué fecha le gustaría? Puede decir "mañana", "el lunes" o una fecha específica.`,
-          `${pick(PERFECT_EN)}${customerName ? `, ${customerName}` : ''}. We'll schedule a ${typeText} appointment. What date works for you? You can say "tomorrow", "next Monday", or a specific date.`,
-        );
-        return { state, replyText, isFinished: false };
+        const cname = state.customerConfirmedName || '';
+        return {
+          state,
+          replyText: t(
+            `${naturalConfirmation('es')}${cname ? `, ${cname}` : ''}. Agendaremos una cita de ${typeText}. ¿Para qué fecha te gustaría? Puedes decir "mañana", "el lunes" o una fecha específica.`,
+            `${naturalConfirmation('en')}${cname ? `, ${cname}` : ''}. We'll set up a ${typeText} appointment. What date works for you? You can say "tomorrow", "next Monday", or a specific date.`,
+          ),
+          isFinished: false,
+        };
       }
 
+      // ── Ask date ───────────────────────────────────────────────────
       case 'askDate': {
         if (!trimmed) {
           return {
             state,
             replyText: t(
-              `${pick(SORRY_ES)}, no alcancé a escuchar la fecha. ¿Para qué día le gustaría la cita?`,
-              `${pick(SORRY_EN)}, I didn't catch the date. What day would you like the appointment?`,
+              `${pick(SORRY_ES)}, no te escuché. ¿Para qué día quieres la cita?`,
+              `${pick(SORRY_EN)}, I didn't catch that. What day would you like the appointment?`,
             ),
             isFinished: false,
           };
         }
 
-        // Try LLM for off-topic handling — the date extraction still uses chrono-node
         const llmDate = await llmProcessStep(state, trimmed, buildStepContext(state));
-        const dateTextForParsing = (llmDate?.data?.dateText as string) || trimmed;
-
-        const parsed = parseDateTimeFromText(dateTextForParsing, state.language);
+        const dateText = (llmDate?.data?.dateText as string) || trimmed;
+        const parsed = parseDateTimeFromText(dateText, state.language);
 
         if (!parsed) {
-          // If LLM gave a reply (user was off-topic), use it
-          if (llmDate && !llmDate.data.dateText) {
-            return { state, replyText: llmDate.reply, isFinished: false };
-          }
+          if (llmDate && !llmDate.data.dateText) return { state, replyText: llmDate.reply, isFinished: false };
           return {
             state,
             replyText: t(
-              'No pude entender esa fecha. Por favor diga algo como "mañana", "el próximo lunes" o "20 de febrero".',
-              'I couldn\'t understand that date. Please say something like "tomorrow", "next Monday", or "February 20th".',
+              'No entendí esa fecha. Puedes decir algo como "mañana", "el próximo lunes" o "20 de febrero".',
+              'I didn\'t quite get that date. You can say something like "tomorrow", "next Monday", or "February 20th".',
             ),
             isFinished: false,
           };
@@ -756,83 +596,81 @@ export function handleUserInput(
 
         if (parsed.hasTime) {
           state = { ...state, step: 'askDuration' };
-          const replyText = t(
-            `${pick(PERFECT_ES)}, la cita será el ${parsed.humanReadable}. ¿Cuánto tiempo durará la visita? Lo estándar es una hora. Diga "está bien" para una hora, o indíqueme otra duración.`,
-            `${pick(PERFECT_EN)}, the appointment will be on ${parsed.humanReadable}. How long will it take? Standard duration is one hour. Say "okay" for one hour, or let me know a different duration.`,
-          );
-          return { state, replyText, isFinished: false };
-        }
-
-        state = { ...state, step: 'askTime' };
-        const replyText = t(
-          `${maybeFiller('es')}Bien, anotaré para el ${parsed.humanReadable}. ¿A qué hora le gustaría? Por ejemplo, "a las 10 de la mañana" o "a las 2 de la tarde".`,
-          `${maybeFiller('en')}Okay, I'll note ${parsed.humanReadable}. What time works for you? For example, "10 AM" or "2 PM".`,
-        );
-        return { state, replyText, isFinished: false };
-      }
-
-      case 'askTime': {
-        if (!trimmed) {
           return {
             state,
             replyText: t(
-              `${pick(SORRY_ES)}, no alcancé a escuchar la hora. ¿A qué hora le gustaría la cita?`,
-              `${pick(SORRY_EN)}, I didn't catch the time. What time would you like?`,
+              `${naturalConfirmation('es')}, la cita será el ${parsed.humanReadable}. Lo estándar es una hora de duración. ¿Te parece bien o prefieres otra duración?`,
+              `${naturalConfirmation('en')}, the appointment will be on ${parsed.humanReadable}. Standard duration is one hour. Does that work or would you prefer something different?`,
             ),
             isFinished: false,
           };
         }
 
-        // Try LLM to extract time text + handle off-topic
-        const llmTime = await llmProcessStep(state, trimmed, buildStepContext(state));
-        const timeTextForParsing = (llmTime?.data?.timeText as string) || trimmed;
+        state = { ...state, step: 'askTime' };
+        return {
+          state,
+          replyText: t(
+            `${maybeFiller('es')}Anotado, ${parsed.humanReadable}. ¿A qué hora te gustaría? Por ejemplo, "a las 10 de la mañana" o "2 de la tarde".`,
+            `${maybeFiller('en')}Got it, ${parsed.humanReadable}. What time works for you? For example, "10 AM" or "2 PM".`,
+          ),
+          isFinished: false,
+        };
+      }
 
-        const baseISO = state.startDateISO ?? new Date().toISOString();
-        const merged = mergeTimeIntoDate(baseISO, timeTextForParsing, state.language);
-
-        if (!merged) {
-          // If LLM gave a reply (user was off-topic), use it
-          if (llmTime && !llmTime.data.timeText) {
-            return { state, replyText: llmTime.reply, isFinished: false };
-          }
+      // ── Ask time ───────────────────────────────────────────────────
+      case 'askTime': {
+        if (!trimmed) {
           return {
             state,
             replyText: t(
-              'No pude entender esa hora. Por favor diga algo como "a las 10" o "2 de la tarde".',
-              'I couldn\'t understand that time. Please say something like "10 AM" or "2 PM".',
+              `${pick(SORRY_ES)}, no escuché la hora. ¿A qué hora quieres la cita?`,
+              `${pick(SORRY_EN)}, I missed the time. What time would you like?`,
+            ),
+            isFinished: false,
+          };
+        }
+
+        const llmTime = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const timeText = (llmTime?.data?.timeText as string) || trimmed;
+        const baseISO = state.startDateISO ?? new Date().toISOString();
+        const merged = mergeTimeIntoDate(baseISO, timeText, state.language);
+
+        if (!merged) {
+          if (llmTime && !llmTime.data.timeText) return { state, replyText: llmTime.reply, isFinished: false };
+          return {
+            state,
+            replyText: t(
+              'No entendí la hora. Puedes decir algo como "a las 10" o "2 de la tarde".',
+              'I didn\'t catch the time. You can say something like "10 AM" or "2 PM".',
             ),
             isFinished: false,
           };
         }
 
         state = { ...state, startDateISO: merged.iso, step: 'askDuration' };
-        if (llmTime?.reply) {
-          return { state, replyText: llmTime.reply, isFinished: false };
-        }
-        const replyText = t(
-          `${pick(PERFECT_ES)}, la cita será el ${merged.humanReadable}. La duración estándar es una hora. ¿Le parece bien, o prefiere otra duración?`,
-          `${pick(PERFECT_EN)}, the appointment will be on ${merged.humanReadable}. Standard duration is one hour. Does that work, or would you prefer a different duration?`,
-        );
-        return { state, replyText, isFinished: false };
+        if (llmTime?.reply) return { state, replyText: llmTime.reply, isFinished: false };
+        return {
+          state,
+          replyText: t(
+            `${naturalConfirmation('es')}, la cita será el ${merged.humanReadable}. La duración estándar es una hora. ¿Está bien o prefieres otra duración?`,
+            `${naturalConfirmation('en')}, appointment set for ${merged.humanReadable}. Standard duration is one hour. Sound good, or would you prefer a different length?`,
+          ),
+          isFinished: false,
+        };
       }
 
+      // ── Ask duration ───────────────────────────────────────────────
       case 'askDuration': {
-        // Try LLM first
         const llmDur = await llmProcessStep(state, trimmed, buildStepContext(state));
         let duration = state.duration ?? '01:00:00';
 
         if (llmDur?.data?.duration && typeof llmDur.data.duration === 'string') {
           duration = llmDur.data.duration;
         } else {
-          // Rule-based fallback
           const lower = trimmed.toLowerCase();
-          if (lower.includes('media hora') || lower.includes('half hour') || lower.includes('30 min')) {
-            duration = '00:30:00';
-          } else if (lower.includes('dos horas') || lower.includes('2 horas') || lower.includes('two hours') || lower.includes('2 hours')) {
-            duration = '02:00:00';
-          } else if (lower.includes('hora y media') || lower.includes('hour and a half') || lower.includes('1.5') || lower.includes('90 min')) {
-            duration = '01:30:00';
-          }
+          if (/media hora|half hour|30 min/.test(lower)) duration = '00:30:00';
+          else if (/dos horas|2 horas|two hours|2 hours/.test(lower)) duration = '02:00:00';
+          else if (/hora y media|hour and a half|1\.5|90 min/.test(lower)) duration = '01:30:00';
         }
 
         state = { ...state, duration, step: 'confirmSummary' };
@@ -843,33 +681,31 @@ export function handleUserInput(
               weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
               hour: '2-digit', minute: '2-digit', hour12: state.language === 'en',
             })
-          : t('(fecha por confirmar)', '(date to be confirmed)');
+          : t('(fecha por confirmar)', '(date TBD)');
         const customerStr = state.customerConfirmedName || state.customerNameSpoken || t('(sin nombre)', '(no name)');
 
-        const replyText = t(
-          `Le confirmo los datos de la cita:\n• Tipo: ${typeStr}\n• Cliente: ${customerStr}\n• Fecha: ${dateStr}\n• Duración: ${duration}\n¿Está correcto? Diga "sí" para confirmar o "no" para empezar de nuevo.`,
-          `Let me confirm the appointment details:\n• Type: ${typeStr}\n• Customer: ${customerStr}\n• Date: ${dateStr}\n• Duration: ${duration}\nIs this correct? Say "yes" to confirm or "no" to start over.`,
-        );
-        return { state, replyText, isFinished: false };
+        return {
+          state,
+          replyText: t(
+            `Perfecto, déjame confirmarte los datos:\n• Tipo: ${typeStr}\n• Cliente: ${customerStr}\n• Fecha: ${dateStr}\n• Duración: ${duration}\n¿Todo bien? Dime "sí" para confirmar o "no" para empezar de nuevo.`,
+            `Great, let me confirm the details:\n• Type: ${typeStr}\n• Customer: ${customerStr}\n• Date: ${dateStr}\n• Duration: ${duration}\nLook good? Say "yes" to confirm or "no" to start over.`,
+          ),
+          isFinished: false,
+        };
       }
 
+      // ── Confirm appointment summary ────────────────────────────────
       case 'confirmSummary': {
-        // Try LLM first for natural yes/no understanding
         const llmConfirm = await llmProcessStep(state, trimmed, buildStepContext(state));
         let isYes = false;
         let isNo = false;
 
-        if (llmConfirm?.data?.confirmed === true) {
-          isYes = true;
-        } else if (llmConfirm?.data?.confirmed === false) {
-          isNo = true;
-        } else {
-          // Rule-based fallback
+        if (llmConfirm?.data?.confirmed === true) isYes = true;
+        else if (llmConfirm?.data?.confirmed === false) isNo = true;
+        else {
           const lower = trimmed.toLowerCase();
-          isYes = lower.includes('sí') || lower.includes('si') || lower.includes('yes')
-            || lower.includes('correcto') || lower.includes('correct') || lower.includes('ok')
-            || lower.includes('bien') || lower.includes('confirma');
-          isNo = lower.includes('no') || lower.includes('cancel') || lower.includes('empez');
+          isYes = /\b(s[ií]|yes|correct[oa]?|ok|bien|confirma)\b/.test(lower);
+          isNo = /\b(no|cancel|empez)\b/.test(lower);
         }
 
         if (isNo) {
@@ -879,49 +715,61 @@ export function handleUserInput(
           return {
             state,
             replyText: t(
-              'De acuerdo, empecemos de nuevo. ¿La cita es para cotización, instalación o reparación?',
-              "Alright, let's start over. Is the appointment for a quote, installation, or repair?",
+              'Sin problema, empecemos de nuevo. ¿La cita es para cotización, instalación o reparación?',
+              "No problem, let's start fresh. Is this for a quote, installation, or repair?",
             ),
             isFinished: false,
           };
         }
+
         if (!isYes) {
           return {
             state,
             replyText: t(
-              '¿Confirma los datos? Diga "sí" para confirmar o "no" para empezar de nuevo.',
-              'Do you confirm the details? Say "yes" to confirm or "no" to start over.',
+              '¿Entonces confirmamos? Dime "sí" o "no".',
+              'So, shall we confirm? Just say "yes" or "no".',
             ),
             isFinished: false,
           };
         }
 
         state = { ...state, step: 'creatingAppointment' };
-        const replyText = t(
-          `${pick(PERFECT_ES)}, ${pick(WAIT_ES).replace('...', '.')} Estoy registrando su cita en el sistema BlindsBook.`,
-          `${pick(PERFECT_EN)}, ${pick(WAIT_EN).replace('...', '.')} I'm creating your appointment in BlindsBook.`,
-        );
-        return { state, replyText, isFinished: false };
+        return {
+          state,
+          replyText: t(
+            `${naturalConfirmation('es')} ${pick(WAIT_ES).replace('...', ',')} estoy registrando tu cita ahora mismo.`,
+            `${naturalConfirmation('en')}! ${pick(WAIT_EN).replace('...', ',')} I'm creating your appointment right now.`,
+          ),
+          isFinished: false,
+        };
       }
 
+      // ── Creating appointment (API call) ────────────────────────────
       case 'creatingAppointment': {
         state = { ...state, step: 'completed' };
         const goodbye = t(pick(GOODBYE_ES), pick(GOODBYE_EN));
-        const replyText = t(
-          `¡Su cita ha sido registrada exitosamente! ¿Hay algo más en lo que pueda ayudarle? Si no, le agradezco mucho su llamada a BlindsBook. ${goodbye}`,
-          `Your appointment has been successfully created! Is there anything else I can help with? If not, thank you so much for calling BlindsBook. ${goodbye}`,
-        );
-        return { state, replyText, isFinished: true };
+        return {
+          state,
+          replyText: t(
+            `¡Listo, tu cita quedó registrada! ¿Necesitas algo más? Si no, muchísimas gracias por llamar a BlindsBook. ${goodbye}`,
+            `All done — your appointment is set! Anything else I can help with? If not, thanks so much for calling BlindsBook. ${goodbye}`,
+          ),
+          isFinished: true,
+        };
       }
 
+      // ── Fallback / error recovery ──────────────────────────────────
       default: {
-        const replyText = t(
-          'Disculpe, hubo un problema. Vamos a empezar de nuevo. ¿La visita es para cotización, instalación o reparación?',
-          "I'm sorry, there was an issue. Let's start again. Is this for a quote, installation, or repair?",
-        );
         state = createInitialState(callId);
         state.step = 'askLanguage';
-        return { state, replyText, isFinished: false };
+        return {
+          state,
+          replyText: t(
+            'Disculpa, tuve un problema. Empecemos de nuevo. ¿La cita es para cotización, instalación o reparación?',
+            "Sorry about that, I hit a snag. Let's start over. Is this for a quote, installation, or repair?",
+          ),
+          isFinished: false,
+        };
       }
     }
   };

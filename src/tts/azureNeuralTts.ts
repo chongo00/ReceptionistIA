@@ -18,24 +18,6 @@ export function isAzureTtsConfigured(): boolean {
   return Boolean(env.azureSpeechKey && env.azureSpeechRegion);
 }
 
-/**
- * Voces neuronales recomendadas por naturalidad:
- * 
- * Español:
- * - es-MX-JorgeNeural (masculina, muy natural, conversacional)
- * - es-ES-ElviraNeural (femenina, cálida, profesional)
- * - es-MX-DaliaNeural (femenina, pero más robótica)
- * 
- * Inglés:
- * - en-US-JennyNeural (femenina, muy natural, conversacional)
- * - en-US-GuyNeural (masculina, amigable)
- * - en-US-AriaNeural (femenina, profesional)
- * 
- * Estilos disponibles (solo algunas voces):
- * - cheerful, empathetic, friendly, hopeful, sad, serious, angry
- * - customerservice (ideal para recepcionistas)
- */
-
 const VOICE_STYLES: Record<string, string> = {
   'es-ES-ElviraNeural': 'cheerful',
   'es-MX-JorgeNeural': 'friendly',
@@ -52,27 +34,21 @@ export async function synthesizeAzureMp3(
   const key = env.azureSpeechKey;
   const region = env.azureSpeechRegion;
   if (!key || !region) {
-    throw new Error('Azure TTS no está configurado (AZURE_SPEECH_KEY/AZURE_SPEECH_REGION)');
+    throw new Error('Azure TTS not configured (AZURE_SPEECH_KEY/AZURE_SPEECH_REGION)');
   }
 
-  // Preferir voces más naturales por defecto
   const voiceName =
     language === 'en'
       ? env.azureTtsVoiceEn || 'en-US-JennyNeural'
       : env.azureTtsVoiceEs || 'es-ES-ElviraNeural';
 
-  // Derive locale tag from voice name (e.g. "es-ES-ElviraNeural" → "es-ES")
   const langTag = voiceName.split('-').slice(0, 2).join('-');
-  
-  // Get style if available for this voice
   const voiceStyle = VOICE_STYLES[voiceName];
 
   const enrichedBody = enrichSsmlBody(escapeXml(text));
-  
-  // Build SSML with optional style
+
   let voiceContent = enrichedBody;
   if (voiceStyle) {
-    // Use mstts:express-as for emotional styles (requires mstts namespace)
     voiceContent = `<mstts:express-as style="${voiceStyle}">${enrichedBody}</mstts:express-as>`;
   }
 
@@ -89,7 +65,6 @@ export async function synthesizeAzureMp3(
     headers: {
       'Ocp-Apim-Subscription-Key': key,
       'Content-Type': 'application/ssml+xml',
-      // Mejor calidad de audio para voz más natural (24kHz en lugar de 16kHz)
       'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
       'User-Agent': 'blindsbook-receptionist-ai',
     },
@@ -101,4 +76,3 @@ export async function synthesizeAzureMp3(
     contentType: 'audio/mpeg',
   };
 }
-

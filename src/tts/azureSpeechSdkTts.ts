@@ -1,15 +1,3 @@
-/**
- * Azure Speech SDK - Text-to-Speech Service (Enhanced)
- * 
- * Uses Microsoft Azure Cognitive Services Speech SDK for professional-grade
- * text-to-speech synthesis with:
- * - Streaming audio output (lower latency)
- * - Neural voices with emotional styles
- * - Advanced SSML for natural prosody
- * - Audio streaming for real-time playback
- * - Concurrency-safe: each synthesis gets its own SpeechConfig
- */
-
 import * as sdk from 'microsoft-cognitiveservices-speech-sdk';
 import { loadEnv } from '../config/env.js';
 import { enrichSsmlBody } from '../dialogue/humanizer.js';
@@ -49,10 +37,6 @@ function resolveVoice(language: SpeechLang): VoiceProfile {
   return envVoice ? { ...base, name: envVoice } : base;
 }
 
-/**
- * Creates a fresh SpeechConfig per synthesis call — avoids race conditions
- * when multiple calls with different languages run concurrently.
- */
 function createSpeechConfig(voice: VoiceProfile): sdk.SpeechConfig {
   const { key, region } = getCredentials();
   const cfg = sdk.SpeechConfig.fromSubscription(key, region);
@@ -61,7 +45,6 @@ function createSpeechConfig(voice: VoiceProfile): sdk.SpeechConfig {
   return cfg;
 }
 
-/* ── Concurrency limiter (Azure S0 allows ~20 concurrent TTS) ── */
 const MAX_CONCURRENT_TTS = 15;
 let _activeTts = 0;
 const _ttsQueue: Array<{ resolve: () => void }> = [];
@@ -89,13 +72,6 @@ function escapeXml(text: string): string {
     .replaceAll("'", '&apos;');
 }
 
-/**
- * Build advanced SSML for natural speech with:
- * - Emotional styles (express-as)
- * - Natural pauses
- * - Prosody variations
- * - Emphasis on key words
- */
 function buildNaturalSsml(text: string, voice: VoiceProfile): string {
   const langTag = voice.name.split('-').slice(0, 2).join('-');
   const enrichedBody = enrichSsmlBody(escapeXml(text));
@@ -119,8 +95,8 @@ function buildNaturalSsml(text: string, voice: VoiceProfile): string {
   }
 
   return `
-    <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" 
-           xmlns:mstts="https://www.w3.org/2001/mstts" 
+    <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis"
+           xmlns:mstts="https://www.w3.org/2001/mstts"
            xml:lang="${langTag}">
       <voice name="${voice.name}">
         ${voiceContent}
@@ -129,10 +105,6 @@ function buildNaturalSsml(text: string, voice: VoiceProfile): string {
   `.trim();
 }
 
-/**
- * Synthesize speech with streaming support.
- * Returns audio data as a Buffer.
- */
 const TTS_TIMEOUT_MS = 10_000;
 
 export async function synthesizeSpeech(
@@ -203,10 +175,6 @@ export interface StreamingTtsCallbacks {
   onError: (error: Error) => void;
 }
 
-/**
- * Synthesize speech with streaming callbacks.
- * Useful for real-time audio playback - starts playing before full synthesis.
- */
 export async function synthesizeSpeechStreaming(
   text: string,
   language: SpeechLang,
@@ -262,10 +230,6 @@ export async function synthesizeSpeechStreaming(
   }
 }
 
-/**
- * Get list of available neural voices for a language.
- * Useful for letting users choose their preferred voice.
- */
 export async function getAvailableVoices(language: SpeechLang): Promise<sdk.VoiceInfo[]> {
   const voice = resolveVoice(language);
   const cfg = createSpeechConfig(voice);

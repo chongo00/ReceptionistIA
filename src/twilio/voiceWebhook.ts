@@ -23,8 +23,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
   const companyConfig = toNumber ? env.twilioNumberToCompanyMap.get(toNumber) : null;
   if (companyConfig) {
     setTokenForCompany(companyConfig);
-    // eslint-disable-next-line no-console
-    console.log(`[Twilio] Usando token para compañía ${companyConfig.companyId} (número: ${toNumber})`);
+    console.log(`[Twilio] Using token for company ${companyConfig.companyId} (number: ${toNumber})`);
   } else if (env.blindsbookApiToken) {
     clearTokenOverride();
   }
@@ -49,9 +48,8 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
       const isoNow = now.toISOString();
 
       if (!state.customerId) {
-        // eslint-disable-next-line no-console
         console.warn(
-          'No se pudo crear la cita: falta customerId. Se requiere resolverlo contra la API de clientes.',
+          'Cannot create appointment: missing customerId. Must be resolved via the customers API.',
         );
       } else {
         const payload: CreateAppointmentPayload = {
@@ -69,8 +67,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
         try {
           await createAppointment(payload);
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.error('Error al crear cita en BlindsBook:', err);
+          console.error('Error creating appointment in BlindsBook:', err);
         }
       }
     }
@@ -100,8 +97,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
           const base = String(env.publicBaseUrl).replace(/\/$/, '');
           const audioUrl = `${base}/tts/${id}.mp3`;
           gather.play({}, audioUrl);
-          // eslint-disable-next-line no-console
-          console.log(`[TTS] Usando proveedor: ${ttsResult.provider}`);
+          console.log(`[TTS] Using provider: ${ttsResult.provider}`);
         } else {
           gather.say(
             {
@@ -112,8 +108,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
           );
         }
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('TTS falló; usando Twilio <Say> fallback:', e);
+        console.warn('[TTS] Failed; using Twilio <Say> fallback:', e);
         gather.say(
           {
             language: twilioLang,
@@ -142,8 +137,7 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
     res.type('text/xml');
     res.send(voiceResponse.toString());
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('Error en webhook de Twilio:', error);
+    console.error('Error in Twilio webhook:', error);
     const errorResponse = new twilio.twiml.VoiceResponse();
     errorResponse.say(
       {
@@ -156,4 +150,3 @@ twilioVoiceRouter.post('/voice-webhook', async (req, res) => {
     res.send(errorResponse.toString());
   }
 });
-
