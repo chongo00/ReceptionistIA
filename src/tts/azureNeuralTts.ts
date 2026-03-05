@@ -19,8 +19,9 @@ export function isAzureTtsConfigured(): boolean {
 }
 
 const VOICE_STYLES: Record<string, string> = {
-  'es-ES-ElviraNeural': 'cheerful',
+  'es-MX-DaliaNeural': 'cheerful',
   'es-MX-JorgeNeural': 'friendly',
+  'es-ES-ElviraNeural': 'cheerful',
   'en-US-JennyNeural': 'friendly',
   'en-US-AriaNeural': 'customerservice',
   'en-US-GuyNeural': 'friendly',
@@ -40,7 +41,7 @@ export async function synthesizeAzureMp3(
   const voiceName =
     language === 'en'
       ? env.azureTtsVoiceEn || 'en-US-JennyNeural'
-      : env.azureTtsVoiceEs || 'es-ES-ElviraNeural';
+      : env.azureTtsVoiceEs || 'es-MX-DaliaNeural';
 
   const langTag = voiceName.split('-').slice(0, 2).join('-');
   const voiceStyle = VOICE_STYLES[voiceName];

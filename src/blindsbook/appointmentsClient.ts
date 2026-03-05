@@ -16,7 +16,7 @@ const tokenManager = new TokenManager(env.blindsbookApiBaseUrl);
 tokenManager.setDefaultCredentials(env.blindsbookLoginEmail, env.blindsbookLoginPassword);
 tokenManager.setDefaultStaticToken(env.blindsbookApiToken || null);
 
-for (const [, config] of env.twilioNumberToCompanyMap) {
+for (const [, config] of env.phoneToCompanyMap) {
   tokenManager.registerCompany(config.companyId, {
     companyId: config.companyId,
     email: config.email ?? '',
@@ -261,7 +261,7 @@ export async function findCustomersByPhone(
       {
         params: { q: searchPhone, limit: 5 },
         headers,
-        timeout: 15000,
+        timeout: 5000,
       }
     );
 

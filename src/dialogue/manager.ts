@@ -68,9 +68,9 @@ const MAX_ID_ATTEMPTS = 3;
 const MAX_DISAMBIG_DISPLAY = 3;
 const LLM_STEP_TIMEOUT_MS = 5000;
 const SEARCH_STEP_TIMEOUT_MS = 6000;
-const PHONE_LOOKUP_TIMEOUT_MS = 18000;
+const PHONE_LOOKUP_TIMEOUT_MS = 6000;
 
-// Race a promise with a timeout, returning fallback on timeout
+// Race a promise with un timeout, devolviendo el fallback si expira
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
     promise,
@@ -132,7 +132,14 @@ export function handleUserInput(
         if (matches.length === 1) {
           const match = matches[0]!;
           const name = customerDisplayName(match);
-          state = { ...state, customerId: match.id, customerConfirmedName: name, customerNameSpoken: name, step: 'greeting' };
+          state = {
+            ...state,
+            customerId: match.id,
+            customerConfirmedName: name,
+            customerNameSpoken: name,
+            userId: match.accountManagerId ?? state.userId,
+            step: 'greeting',
+          };
           const greeting = t(pick(GREETINGS_ES).replace('{name}', name), pick(GREETINGS_EN).replace('{name}', name));
           return { state, replyText: `${greeting} ${t(pick(HOW_CAN_HELP_ES), pick(HOW_CAN_HELP_EN))}`, isFinished: false };
         }
@@ -209,7 +216,15 @@ export function handleUserInput(
         if (numChoice >= 1 && numChoice <= state.customerMatches.length) {
           const match = state.customerMatches[numChoice - 1]!;
           const name = customerDisplayName(match);
-          state = { ...state, customerId: match.id, customerConfirmedName: name, customerNameSpoken: name, step: 'greeting', customerMatches: [] };
+          state = {
+            ...state,
+            customerId: match.id,
+            customerConfirmedName: name,
+            customerNameSpoken: name,
+            userId: match.accountManagerId ?? state.userId,
+            step: 'greeting',
+            customerMatches: [],
+          };
           return {
             state,
             replyText: llmResult?.reply || t(
@@ -222,7 +237,15 @@ export function handleUserInput(
 
         if (nameMatch) {
           const name = customerDisplayName(nameMatch);
-          state = { ...state, customerId: nameMatch.id, customerConfirmedName: name, customerNameSpoken: name, customerMatches: [], step: 'confirmCustomerIdentity' };
+          state = {
+            ...state,
+            customerId: nameMatch.id,
+            customerConfirmedName: name,
+            customerNameSpoken: name,
+            userId: nameMatch.accountManagerId ?? state.userId,
+            customerMatches: [],
+            step: 'confirmCustomerIdentity',
+          };
           return run();
         }
 
@@ -345,7 +368,15 @@ export function handleUserInput(
         }
 
         if (isYes) {
-          state = { ...state, customerId: match.id, customerConfirmedName: name, customerNameSpoken: name, customerMatches: [], step: 'greeting' };
+          state = {
+            ...state,
+            customerId: match.id,
+            customerConfirmedName: name,
+            customerNameSpoken: name,
+            userId: match.accountManagerId ?? state.userId,
+            customerMatches: [],
+            step: 'greeting',
+          };
           return {
             state,
             replyText: t(
@@ -709,9 +740,23 @@ export function handleUserInput(
         }
 
         if (isNo) {
-          const prevLang = state.language;
-          state = createInitialState(callId);
-          state = { ...state, language: prevLang, step: 'askType' };
+          // Preserve customer & session fields; only reset appointment-specific data
+          state = {
+            ...state,
+            step: 'askType',
+            type: null,
+            startDateISO: null,
+            duration: '01:00:00',
+            status: 0,
+            saleOrderId: null,
+            installationContactId: null,
+            remarks: null,
+            askedAboutType: false,
+            askedAboutDate: false,
+            askedAboutTime: false,
+            lastQuestion: null,
+            silenceCount: 0,
+          };
           return {
             state,
             replyText: t(

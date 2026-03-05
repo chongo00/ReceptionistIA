@@ -178,6 +178,7 @@ CURRENT STEP: ${ctx.step}
 GOAL: ${ctx.goal}
 ${ctx.extra ? `CONTEXT: ${ctx.extra}` : ''}
 
+STYLE: Short answers (1–2 sentences). Use backchannels when something is happening in the background (e.g. "One sec, let me look that up...", "Bear with me..."). Operational = "give me a moment"; Informative = confirmations, summaries, goodbye.
 RULES:
 1. ALWAYS move the conversation forward — acknowledge + ask next logical question in the SAME reply.
 2. If the user gives partial info, acknowledge it AND ask for what's missing.
@@ -207,6 +208,7 @@ PASO ACTUAL: ${ctx.step}
 OBJETIVO: ${ctx.goal}
 ${ctx.extra ? `CONTEXTO: ${ctx.extra}` : ''}
 
+ESTILO: Respuestas cortas (1–2 oraciones). Usa muletillas cuando algo pasa en segundo plano (ej. "Dame un segundo que busco...", "Un momentito..."). Operativo = "dame un momento"; Informativo = confirmaciones, resúmenes, despedida.
 REGLAS:
 1. SIEMPRE avanza la conversación — reconoce + pregunta lo siguiente en la MISMA respuesta.
 2. Si el usuario da info parcial, reconócela Y pregunta lo que falta.

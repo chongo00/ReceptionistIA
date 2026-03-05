@@ -49,7 +49,7 @@ function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number): s
 
   cfg.setProperty(
     sdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
-    String(silenceTimeoutMs ?? 1500)
+    String(silenceTimeoutMs ?? 1000)
   );
   cfg.setProperty(
     sdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs,

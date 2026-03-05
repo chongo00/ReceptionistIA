@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import bodyParser from 'body-parser';
 import cors from 'cors';
-import { twilioVoiceRouter } from './twilio/voiceWebhook.js';
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from './dialogue/manager.js';
 import { loadEnv } from './config/env.js';
 import { setTokenForCompany, clearTokenOverride, createAppointment, initTokenManager, findCustomersByPhone } from './blindsbook/appointmentsClient.js';
@@ -27,7 +26,9 @@ export async function startServer() {
   app.use(cors());
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  app.use('/test', express.static(path.join(__dirname, '..', 'public')));
+  if (env.voiceSimulatorEnabled) {
+    app.use('/test', express.static(path.join(__dirname, '..', 'public')));
+  }
 
   app.get('/health', async (_req, res) => {
     const llmProvider = await getAvailableLlmProvider();
@@ -37,7 +38,7 @@ export async function startServer() {
       service: 'blindsbook-ia',
       status: 'healthy',
       llm: llmProvider,
-      tts: isAzureTtsConfigured() ? 'azure-speech-sdk' : 'twilio-say-fallback',
+      tts: isAzureTtsConfigured() ? 'azure-speech-sdk' : 'none',
       stt: isAzureSttConfigured() ? 'azure-speech-sdk' : 'browser-webspeech',
       ocr: isAzureVisionConfigured() ? 'azure-openai-vision + edge-detection' : 'edge-detection-only',
       voiceWebSocket: isVoiceWebSocketReady() ? 'ready' : 'fallback-http',
@@ -45,7 +46,7 @@ export async function startServer() {
     });
   });
 
-  // Serves temporary TTS audio files referenced by Twilio <Play/> verb
+  // Serves temporary TTS audio files
   app.get('/tts/:id.mp3', (req, res) => {
     const id = String(req.params.id || '');
     const audio = getAudio(id);
@@ -65,7 +66,7 @@ export async function startServer() {
     const fromNumber = typeof req.body?.fromNumber === 'string' ? req.body.fromNumber : null;
 
     if (toNumber) {
-      const cfg = env.twilioNumberToCompanyMap.get(toNumber);
+      const cfg = env.phoneToCompanyMap.get(toNumber);
       if (cfg) setTokenForCompany(cfg);
     } else {
       clearTokenOverride();
@@ -132,13 +133,13 @@ export async function startServer() {
       phone: string | null;
       accountManagerId: number | null;
       companyId: number;
-      twilioNumber: string;
+      companyPhone: string;
     }
 
     const results: LookupResult[] = [];
     const companiesSearched: number[] = [];
 
-    for (const [twilioNumber, cfg] of env.twilioNumberToCompanyMap) {
+    for (const [companyPhone, cfg] of env.phoneToCompanyMap) {
       companiesSearched.push(cfg.companyId);
       try {
         setTokenForCompany(cfg);
@@ -147,7 +148,7 @@ export async function startServer() {
           results.push({
             ...match,
             companyId: cfg.companyId,
-            twilioNumber,
+            companyPhone,
           });
         }
       } catch (err) {
@@ -173,7 +174,7 @@ export async function startServer() {
     const fromNumber = typeof req.body?.fromNumber === 'string' ? req.body.fromNumber : null;
 
     if (toNumber) {
-      const cfg = env.twilioNumberToCompanyMap.get(toNumber);
+      const cfg = env.phoneToCompanyMap.get(toNumber);
       if (cfg) setTokenForCompany(cfg);
     } else {
       clearTokenOverride();
@@ -286,8 +287,6 @@ export async function startServer() {
       res.status(500).json({ error: 'processing_error', message: 'Failed to process image' });
     }
   });
-
-  app.use('/twilio', twilioVoiceRouter);
 
   try {
     await initTokenManager();

@@ -8,7 +8,7 @@ Documentacion tecnica completa del sistema de recepcionista telefonica inteligen
 
 Receptionist IA es un servicio Node.js/TypeScript que actua como **agente de call center automatizado** para BlindsBook. El sistema:
 
-- Recibe llamadas telefonicas via Twilio o conexiones WebSocket en tiempo real
+- Recibe llamadas telefonicas via **Azure Communication Services (ACS)** + **Azure AI Voice Live API** o conexiones WebSocket en tiempo real
 - Identifica al cliente automaticamente por Caller ID, nombre o telefono
 - Gestiona conversaciones bilingues (espanol/ingles) con voz neuronal
 - Crea citas (quotes, instalaciones, reparaciones) directamente en la API de BlindsBook
@@ -19,11 +19,10 @@ Receptionist IA es un servicio Node.js/TypeScript que actua como **agente de cal
 
 | Servicio | Funcion | Requerido |
 |----------|---------|-----------|
-| **Azure OpenAI** (gpt-4o-mini) | LLM principal — comprension conversacional | Si |
+| **Azure OpenAI** (gpt-4o-mini) | LLM principal — comprension conversacional y tool calling | Si |
 | **Azure Speech SDK** | STT (Speech-to-Text) + TTS (Text-to-Speech) neuronal | Si |
-| **Twilio** | Telefonia — recibe llamadas reales | Solo produccion |
-| **API BlindsBook** | Backend — clientes, citas, usuarios | Si |
-| **Ollama** (qwen2.5:3b) | LLM local de fallback si Azure OpenAI no esta disponible | No |
+| **Azure Communication Services (ACS)** | Telefonia — recibe llamadas reales via Voice Live API | Produccion |
+| **API BlindsBook** | Backend — clientes, citas, usuarios, equipo | Si |
 
 ---
 
@@ -32,7 +31,8 @@ Receptionist IA es un servicio Node.js/TypeScript que actua como **agente de cal
 ```
     Llamada telefonica          Navegador (voice-test-v2)         Drapery Calculator App
           |                              |                                |
-       Twilio                    WebSocket /ws/voice               POST /ocr/window-frame
+    ACS Call Automation          WebSocket /ws/voice               POST /ocr/window-frame
+    + Voice Live API                     |                                |
           |                              |                                |
     ┌─────┴──────────────── Express (puerto 4000) ────────────────────────┐
     |                                                                      |
@@ -42,20 +42,23 @@ Receptionist IA es un servicio Node.js/TypeScript que actua como **agente de cal
     |  |  - Azure STT (speech-to-text)       |    |  - Sharp (edges)     | |
     |  |  - Azure TTS (text-to-speech)       |    └──────────────────────┘ |
     |  |  - Rate limiting TTS (max 15)       |                             |
+    |  |  - Barge-in y control de turnos     |                             |
     |  └────────────┬────────────────────────┘                             |
     |               |                                                      |
     |  ┌────────────┴────────────────────────┐                             |
     |  |        Dialogue Manager             |                             |
     |  |  - Maquina de estados por llamada   |                             |
     |  |  - Identificacion (3 niveles)       |                             |
-    |  |  - LLM conversacional               |                             |
+    |  |  - LLM conversacional (Azure)       |                             |
     |  |  - Parser de fechas (chrono-node)   |                             |
+    |  |  - Humanizer (SSML + frases)        |                             |
     |  └────────────┬────────────────────────┘                             |
     |               |                                                      |
     |  ┌────────────┴────────────────────────┐                             |
     |  |    BlindsBook API Client            |                             |
     |  |  - TokenManager (multi-tenant)      |                             |
-    |  |  - Cache de busquedas               |                             |
+    |  |  - Switch-company (superusuario)    |                             |
+    |  |  - Cache de busquedas (5 min)       |                             |
     |  |  - Endpoints optimizados            |                             |
     |  └─────────────────────────────────────┘                             |
     └──────────────────────────────────────────────────────────────────────┘
@@ -63,10 +66,10 @@ Receptionist IA es un servicio Node.js/TypeScript que actua como **agente de cal
 
 ### Multi-tenant
 
-El sistema soporta multiples empresas en un mismo servidor. Cada numero Twilio se mapea a una compania en la API de BlindsBook:
+El sistema soporta multiples empresas en un mismo servidor. Cada numero telefonico (ACS) se mapea a una compania en la API de BlindsBook:
 
 ```
-TWILIO_NUMBER_TO_COMPANY_MAP={"+15550001":{"companyId":2},"+15550002":{"companyId":163}}
+PHONE_TO_COMPANY_MAP={"+15550001":{"companyId":2},"+15550002":{"companyId":163}}
 ```
 
 El `TokenManager` se autentica automaticamente como superusuario y usa `POST /auth/switch-company` para obtener tokens JWT por empresa, renovandolos proactivamente cada 30 minutos.
@@ -78,7 +81,7 @@ El `TokenManager` se autentica automaticamente como superusuario y usa `POST /au
 ```
 Receptionist IA/
 ├── src/
-│   ├── index.ts                         # Punto de entrada
+│   ├── index.ts                         # Punto de entrada (dotenv + startServer)
 │   ├── server.ts                        # Express + HTTP server + graceful shutdown
 │   ├── config/
 │   │   └── env.ts                       # Variables de entorno (EnvConfig)
@@ -87,43 +90,46 @@ Receptionist IA/
 │   ├── dialogue/
 │   │   ├── state.ts                     # ConversationState, ConversationStep, CustomerMatch
 │   │   ├── manager.ts                   # Maquina de estados principal (handleUserInput)
-│   │   ├── conversationalLlm.ts         # Prompts del LLM conversacional
+│   │   ├── conversationalLlm.ts         # Prompts del LLM conversacional por paso
 │   │   ├── dateParser.ts                # Parser de fechas naturales (chrono-node)
-│   │   └── humanizer.ts                 # Enriquecimiento SSML para voz natural
+│   │   └── humanizer.ts                 # Frases naturales ES/EN + enriquecimiento SSML
 │   ├── stt/
-│   │   └── azureSpeechStt.ts            # Speech-to-Text (Azure Speech SDK)
+│   │   └── azureSpeechStt.ts            # Speech-to-Text (Azure Speech SDK, push stream)
 │   ├── tts/
-│   │   ├── azureSpeechSdkTts.ts         # TTS principal (Azure Speech SDK, concurrency-safe)
+│   │   ├── azureSpeechSdkTts.ts         # TTS principal (Azure Speech SDK, streaming por frase)
 │   │   ├── azureNeuralTts.ts            # TTS via REST API (fallback)
-│   │   ├── ttsProvider.ts               # Selector de TTS: SDK > REST > Docker > none
-│   │   ├── ttsCache.ts                  # Cache temporal de MP3 (TTL configurable)
-│   │   └── dockerTts.ts                 # Cliente Piper TTS (Docker local, opcional)
+│   │   ├── ttsProvider.ts               # Selector de TTS: SDK > REST > none
+│   │   └── ttsCache.ts                  # Cache temporal de MP3 (TTL configurable)
 │   ├── llm/
-│   │   ├── llmClient.ts                 # Selector LLM: Azure OpenAI > Ollama
-│   │   ├── azureOpenaiClient.ts         # Cliente Azure OpenAI
-│   │   ├── ollamaClient.ts             # Cliente Ollama (fallback)
-│   │   └── identificationAgent.ts       # Agente LLM nivel 3 (tool calling)
+│   │   ├── llmClient.ts                 # Selector LLM: Azure OpenAI (unico proveedor)
+│   │   ├── azureOpenaiClient.ts         # Cliente Azure OpenAI (chat + tool calling)
+│   │   ├── identificationAgent.ts       # Agente LLM nivel 3 (tool calling multi-turno)
+│   │   └── types.ts                     # Tipos: ChatMessage, ToolCall, ToolDefinition
 │   ├── blindsbook/
-│   │   ├── appointmentsClient.ts        # Cliente API: clientes, citas, busquedas
-│   │   └── tokenManager.ts             # Gestion de tokens JWT multi-tenant
-│   ├── twilio/
-│   │   └── voiceWebhook.ts             # Webhook Twilio (TwiML)
+│   │   ├── appointmentsClient.ts        # Cliente API: clientes, citas, busquedas, team
+│   │   └── tokenManager.ts             # Gestion de tokens JWT multi-tenant + switch-company
+
 │   ├── ocr/
 │   │   ├── windowFrameDetector.ts       # Deteccion de marcos (Sharp + Laplaciano)
 │   │   └── azureVisionOcr.ts           # OCR con Azure OpenAI Vision (GPT-4o)
 │   └── models/
 │       └── appointments.ts              # Tipos: AppointmentType, CreateAppointmentPayload
 ├── public/
-│   ├── voice-test-v2.html               # Simulador de llamada WebSocket
+│   ├── voice-test-v2.html               # Simulador de llamada WebSocket (solo dev)
 │   └── mic-test.html                    # Diagnostico de microfono
 ├── scripts/
 │   ├── test_chat.ps1                    # Script PowerShell para pruebas de chat
-│   └── check-appointments.cjs           # Verificacion de citas creadas
+│   ├── check-appointments.cjs           # Verificacion de citas creadas
+│   └── validar_citas.sql               # Query SQL para validar citas
 ├── docs/
 │   ├── DOCUMENTACION_GENERAL.md         # Este documento
-│   └── GUIA_PRUEBAS_MANUALES.md        # Guia de pruebas con escenarios detallados
+│   ├── GUIA_PRUEBAS_MANUALES.md        # Guiones de pruebas de voz paso a paso
+│   ├── CONVERSATIONAL_STYLE.md          # Tabla de frases y reglas de estilo
+│   ├── VOICE_WEBSOCKET_PROTOCOL.md      # Protocolo WebSocket /ws/voice
+│   ├── ACS_VOICE_LIVE_INTEGRATION.md    # Plan de integracion ACS + Voice Live
+│   └── PLAN_VOICE_AGENT_ACS_VOICE_LIVE.md # Plan de fases del agente de voz
 ├── Dockerfile                           # Imagen basica Node.js
-├── Dockerfile.cloud                     # Imagen multi-stage para produccion (~200MB)
+├── Dockerfile.cloud                     # Imagen multi-stage produccion (~200MB)
 ├── docker-compose.yml                   # Orquestacion Docker local
 ├── package.json
 ├── tsconfig.json
@@ -157,7 +163,7 @@ askLanguage
            │                           │              │
            │                           │         (3 intentos fallidos?)
            │                           │              │
-           │                           │         llmFallback (Azure OpenAI)
+           │                           │         llmFallback (Azure OpenAI tool calling)
            │                           │
     greeting ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
         │
@@ -165,13 +171,16 @@ askLanguage
         │
     askDate → (fecha en lenguaje natural: "manana", "el lunes", "3 de marzo")
         │
-    askTime → (hora: "a las 3", "3pm", "por la manana")
+    askTime → (hora: "a las 3", "3pm")  ← se salta si la fecha incluyo hora
+        │
+    askDuration → (1 hora estandar, o personalizada)
         │
     confirmSummary → (resumen completo de la cita)
         │
-    creatingAppointment → POST /appointments en API BlindsBook
-        │
-    completed → (despedida)
+    ├── "no" → vuelve a askType (conserva datos del cliente)
+    └── "si" → creatingAppointment → POST /appointments
+                    │
+                completed → (despedida)
 ```
 
 ### 4.2 Identificacion de cliente (3 niveles)
@@ -180,18 +189,31 @@ askLanguage
 |-------|-----------|---------------|-----|
 | 1 | **Caller ID** — busca por telefono automaticamente | ~3s | ~60% de las llamadas |
 | 2 | **Nombre/telefono** — el cliente lo dice verbalmente | ~2s | ~30% de las llamadas |
-| 3 | **LLM (Azure OpenAI)** — tool calling contra la API | ~5s | ~10% casos complejos |
+| 3 | **LLM Agent (Azure OpenAI)** — tool calling contra la API | ~5s | ~10% casos complejos |
 
-La busqueda de clientes usa el endpoint optimizado `GET /customers/quick-search` de la API BlindsBook, con normalizacion de telefono (elimina codigo de pais +1) y cache en memoria.
+La busqueda de clientes usa el endpoint optimizado `GET /customers/quick-search` de la API BlindsBook, con normalizacion de telefono (elimina codigo de pais +1) y cache en memoria (TTL 5 min).
+
+**Nivel 3 — Agente LLM de identificacion** (`src/llm/identificationAgent.ts`):
+
+El agente tiene 4 herramientas disponibles:
+- `searchCustomers` — busca clientes por nombre, telefono o email
+- `searchTeamMembers` — busca vendedores/asesores del equipo
+- `searchByAccountManager` — busca clientes de un vendedor especifico
+- `createCustomer` — registra un cliente nuevo (solo si confirma)
+
+Marcadores de salida: `[IDENTIFIED:id:nombre]`, `[CREATED:id:nombre]`, `[TRANSFER]`.
 
 ### 4.3 LLM conversacional
 
-El sistema usa Azure OpenAI (gpt-4o-mini) para:
-- Comprender respuestas ambiguas del usuario
-- Generar respuestas naturales y proactivas
-- Nivel 3 de identificacion (tool calling: busca clientes por nombre/telefono)
+El sistema usa Azure OpenAI (gpt-4o-mini) con system prompts contextuales para cada paso. Configurado en `src/dialogue/conversationalLlm.ts`:
 
-El LLM recibe un system prompt contextual segun el paso actual de la conversacion, configurado en `src/dialogue/conversationalLlm.ts`.
+- Cada paso tiene un `StepContext` con objetivo, campos a extraer e info extra
+- El LLM responde en formato JSON estructurado: `{"reply": "...", "data": {...}}`
+- Maximo 120 tokens, temperatura 0.4
+- Timeout de 5s para procesamiento LLM, 6s para busquedas API
+- Si Azure OpenAI no esta disponible, el sistema usa reglas deterministas como fallback
+
+**Personalidad:** Sara (ES) / Sarah (EN) — recepcionista calida, casual y profesional. Respuestas de 1-2 oraciones. Usa expresiones naturales, fillers, y backchannels. Ver `docs/CONVERSATIONAL_STYLE.md`.
 
 ---
 
@@ -199,71 +221,87 @@ El LLM recibe un system prompt contextual segun el paso actual de la conversacio
 
 ### 5.1 WebSocket (`/ws/voice`)
 
-El servidor WebSocket en `src/realtime/voiceWebSocket.ts` maneja la comunicacion bidireccional de audio:
+El servidor WebSocket en `src/realtime/voiceWebSocket.ts` maneja la comunicacion bidireccional de audio. Ver documentacion del protocolo en `docs/VOICE_WEBSOCKET_PROTOCOL.md`.
 
-**Protocolo de mensajes (cliente → servidor):**
+**Resumen del protocolo:**
 
-| Tipo | Payload | Descripcion |
-|------|---------|-------------|
-| `init` | `{ callerId, companyPhone }` | Inicia sesion con datos del llamante |
-| `language` | `{ language: "es" \| "en" }` | Selecciona idioma |
-| `text` | `{ text: "..." }` | Envia texto (bypass de STT) |
-| `audio` | `Buffer (binario)` | Audio PCM 16-bit 16kHz |
-| `hangup` | – | Termina la llamada |
-| `ping` | – | Keep-alive |
-
-**Protocolo de mensajes (servidor → cliente):**
-
-| Tipo | Payload | Descripcion |
-|------|---------|-------------|
-| `greeting` | `{ text, state }` | Saludo inicial |
-| `interim` | `{ text }` | Transcripcion parcial (mientras habla) |
-| `final` | `{ text, state }` | Respuesta de la IA |
-| `audio` | `{ audioBase64, text }` | Audio MP3 de la respuesta |
-| `state` | `{ data }` | Cambios de estado (listening, speaking) |
-| `finished` | `{ text }` | Conversacion terminada |
-| `error` | `{ text }` | Error |
+| Direccion | Tipo | Descripcion |
+|-----------|------|-------------|
+| C→S | `init` | Inicia sesion con callerId y companyPhone |
+| C→S | `language` | Selecciona idioma (es/en) |
+| C→S | `text` | Entrada por teclado (bypass STT) |
+| C→S | binario | Audio PCM 16-bit 16kHz mono |
+| C→S | `hangup` | Termina la llamada |
+| C→S | `ping` | Keep-alive |
+| S→C | `greeting` | Saludo inicial |
+| S→C | `interim` | Transcripcion parcial |
+| S→C | `final` | Respuesta de la IA + estado |
+| S→C | `audio` | Fragmento TTS (MP3 base64) |
+| S→C | `state` | Cambios de estado (listening, speaking) |
+| S→C | `finished` | Conversacion terminada |
+| S→C | `error` | Error |
+| S→C | `pong` | Respuesta a ping |
 
 ### 5.2 Concurrencia y limites
 
-| Parametro | Valor | Configurable |
-|-----------|-------|-------------|
+| Parametro | Valor | Ubicacion |
+|-----------|-------|-----------|
 | Sesiones WebSocket simultaneas | 20 max | `MAX_CONCURRENT_SESSIONS` en voiceWebSocket.ts |
 | Operaciones TTS simultaneas | 15 max | `MAX_CONCURRENT_TTS` en azureSpeechSdkTts.ts |
 | Timeout de TTS | 10s | `TTS_TIMEOUT_MS` en azureSpeechSdkTts.ts |
 | Timeout de inactividad | 5 min | `SESSION_TIMEOUT_MS` en voiceWebSocket.ts |
-| Timeout de silencio (STT) | 2s | `SILENCE_TIMEOUT_MS` en voiceWebSocket.ts |
+| Timeout de silencio (WS) | 2s | `SILENCE_TIMEOUT_MS` en voiceWebSocket.ts |
+| Timeout de silencio (STT) | 1s | `silenceTimeoutMs: 1000` en azureSpeechStt.ts |
+| Timeout LLM | 10s | `LLM_TIMEOUT` en azureOpenaiClient.ts |
+| Timeout busqueda API | 30s | axios default en appointmentsClient.ts |
 
 **Aislamiento por sesion:**
 - Cada sesion WebSocket tiene su propio `VoiceSession` con estado independiente
 - Cada operacion TTS crea su propio `SpeechConfig` (evita race conditions entre idiomas)
 - Cada recognizer STT tiene su propio `SpeechConfig` con idioma aislado
-- Cola FIFO para TTS cuando se alcanza el limite concurrente (las siguientes esperan turno)
+- Cola FIFO para TTS cuando se alcanza el limite concurrente
 
-### 5.3 Graceful shutdown
+### 5.3 Barge-in y control de turnos
+
+- `VoiceSession` tiene `currentTtsId` y `pendingBargeIn`
+- Si el usuario envia audio mientras TTS reproduce → `cancelCurrentSpeech()` cancela el TTS
+- En `speakResponse` se verifica `ttsId` antes de enviar cada fragmento
+- El recognizer STT se reanuda tras la cancelacion
+
+### 5.4 Graceful shutdown
 
 Al recibir `SIGTERM` o `SIGINT`:
 1. Notifica a todos los clientes WebSocket conectados
 2. Detiene todos los recognizers STT activos
-3. Cierra todas las conexiones
-4. Libera estados de conversacion
-5. Cierra el servidor HTTP
-6. Force-exit despues de 10s si algo se cuelga
+3. Cierra todas las conexiones y libera estados
+4. Cierra el servidor HTTP
+5. Force-exit despues de 10s si algo se cuelga
 
-### 5.4 Azure Speech SDK
+### 5.5 Azure Speech SDK
 
 **STT (Speech-to-Text)** — `src/stt/azureSpeechStt.ts`
 - Usa `PushAudioInputStream` para recibir audio en streaming
 - Reconocimiento continuo con resultados interim y finales
-- Deteccion de silencio configurable (1.5s por defecto)
+- Timeout de silencio: 1000ms (`Speech_SegmentationSilenceTimeoutMs`)
+- Timeout de silencio inicial: 10s (`InitialSilenceTimeoutMs`)
 
 **TTS (Text-to-Speech)** — `src/tts/azureSpeechSdkTts.ts`
-- Voces neuronales con estilos emocionales (cheerful, friendly)
-- SSML avanzado: pausas, prosodia, enfasis, `<say-as>` para numeros/fechas
+- Streaming por frase (divide texto, sintetiza sentencia por sentencia)
+- SSML con prosodia, pausas, enfasis, `<say-as>` y estilos emocionales
 - Output: MP3 24kHz 48kbps
 - Voces por defecto:
-  - Espanol: `es-MX-JorgeNeural` (o `es-ES-ElviraNeural` via env)
-  - Ingles: `en-US-JennyNeural`
+  - Espanol: `es-MX-DaliaNeural` (estilo cheerful, grado 0.8)
+  - Ingles: `en-US-JennyNeural` (estilo friendly, grado 0.9)
+- Fallback a REST API (`azureNeuralTts.ts`) si el SDK falla
+
+### 5.6 Telemetria
+
+Logs automaticos:
+- `t_connect_to_greeting` — latencia de conexion a saludo
+- `t_language_to_identified_greeting` — latencia de idioma a saludo identificado
+- `t_user_final_to_first_audio_chunk` — latencia de voz a respuesta (<500ms ideal)
+- `tts_ms`, `tts_bytes` — duracion y tamano de TTS por frase
+- Estadisticas periodicas cada 5 min (sesiones activas, TTS active/queued)
 
 ---
 
@@ -271,25 +309,22 @@ Al recibir `SIGTERM` o `SIGINT`:
 
 ### 6.1 TokenManager (`src/blindsbook/tokenManager.ts`)
 
-Gestiona la autenticacion multi-tenant:
-
 1. **Login** como superusuario con `BLINDSBOOK_LOGIN_EMAIL` / `BLINDSBOOK_LOGIN_PASSWORD`
-2. **Switch-company** para cada compania registrada en `TWILIO_NUMBER_TO_COMPANY_MAP`
-3. **Renovacion proactiva** cada 30 minutos (los tokens duran 1440 min / 24h)
-4. **Retry** automatico: 3 intentos con backoff exponencial
+2. **Switch-company** para cada compania registrada en `PHONE_TO_COMPANY_MAP`
+3. **Renovacion proactiva** cada 30 minutos
+4. **Retry** automatico: 3 intentos con backoff de 5s
+5. **Lock de login** para evitar logins concurrentes
+6. **Fallback** a tokens estaticos si el auto-login falla
 
 ### 6.2 Busqueda de clientes (`src/blindsbook/appointmentsClient.ts`)
 
-- `findCustomersByPhone(phone)` — Busca por telefono usando `GET /customers/quick-search`
-  - Normaliza telefono: elimina prefijo +1 para numeros US
-  - Cache en memoria con TTL de 5 minutos
-  - Fallback a endpoint legacy si quick-search falla
-- `findCustomersBySearch(term)` — Busca por nombre o termino libre
-- Timeout de 30s en todas las llamadas HTTP (axios)
+- `findCustomersByPhone(phone)` — `GET /customers/quick-search` con cache 5 min
+- `findCustomersBySearch(term)` — busca por nombre (quick-search → fallback `/customers`)
+- `findCustomersByAccountManager(search, id)` — filtra clientes por vendedor
+- `searchTeamMembers(search)` — busca vendedores/asesores del equipo
+- `createNewCustomer(firstName, lastName, phone)` — registra cliente nuevo
 
 ### 6.3 Creacion de citas
-
-Payload enviado a `POST /appointments`:
 
 ```typescript
 interface CreateAppointmentPayload {
@@ -298,49 +333,20 @@ interface CreateAppointmentPayload {
   startDate: string;           // ISO 8601
   duration?: string;           // "HH:MM:SS" (default: "01:00:00")
   status?: 0 | 1 | 2;         // 0=Pending (default)
-  userId?: number;             // Usuario asignado (accountManagerId del cliente)
-  saleOrderId?: number;        // Requerido si type=1 (instalacion)
+  userId?: number;             // accountManagerId del cliente
+  saleOrderId?: number;
   installationContactId?: number;
   remarks?: string;
 }
 ```
 
+El `userId` se asigna al `accountManagerId` del cliente para que la cita aparezca en el calendario del asesor correcto.
+
 ---
 
 ## 7. OCR — Deteccion de marco de ventana
 
-Endpoint `POST /ocr/window-frame` usado por la app Drapery Calculator.
-
-**Cascada de deteccion:**
-
-| Nivel | Motor | Precision |
-|-------|-------|-----------|
-| 1 | Azure OpenAI Vision (GPT-4o) | Alta (~95%) |
-| 2 | Sharp + Laplaciano (edge detection) | Media (~70%) |
-
-**Request:**
-```json
-{
-  "image": "data:image/jpeg;base64,/9j/...",
-  "width": 1920,
-  "height": 1080
-}
-```
-
-**Response:**
-```json
-{
-  "rectangle": {
-    "topLeft": { "x": 120, "y": 80 },
-    "topRight": { "x": 1800, "y": 80 },
-    "bottomLeft": { "x": 120, "y": 1000 },
-    "bottomRight": { "x": 1800, "y": 1000 },
-    "width": 1680,
-    "height": 920
-  },
-  "confidence": 0.82
-}
-```
+Endpoint `POST /ocr/window-frame` (Drapery Calculator). Cascada: Azure Vision GPT-4o → Sharp edge detection.
 
 ---
 
@@ -354,79 +360,44 @@ Copiar `.env.example` a `.env` y configurar:
 
 | Variable | Descripcion |
 |----------|-------------|
-| `AZURE_OPENAI_ENDPOINT` | Endpoint de Azure OpenAI (ej: `https://tu-recurso.openai.azure.com`) |
+| `AZURE_OPENAI_ENDPOINT` | `https://tu-recurso.openai.azure.com` |
 | `AZURE_OPENAI_API_KEY` | API Key de Azure OpenAI |
 | `AZURE_OPENAI_DEPLOYMENT` | Nombre del deployment (ej: `gpt-4o-mini`) |
 | `AZURE_SPEECH_KEY` | Clave de Azure Speech Services |
 | `AZURE_SPEECH_REGION` | Region de Azure Speech (ej: `eastus`) |
 | `BLINDSBOOK_API_BASE_URL` | URL de la API BlindsBook |
-| `BLINDSBOOK_LOGIN_EMAIL` | Email del superusuario para auto-login |
+| `BLINDSBOOK_LOGIN_EMAIL` | Email del superusuario |
 | `BLINDSBOOK_LOGIN_PASSWORD` | Password del superusuario |
-| `TWILIO_NUMBER_TO_COMPANY_MAP` | Mapeo de numeros Twilio a companias (JSON) |
+| `PHONE_TO_COMPANY_MAP` | Mapeo de numeros a companias (JSON) |
 
 **Opcionales:**
 
-| Variable | Descripcion | Default |
-|----------|-------------|---------|
-| `PORT` | Puerto del servidor | `4000` |
-| `PUBLIC_BASE_URL` | URL publica (para Twilio `<Play>`) | – |
-| `AZURE_TTS_VOICE_ES` | Voz neuronal espanol | `es-MX-JorgeNeural` |
-| `AZURE_TTS_VOICE_EN` | Voz neuronal ingles | `en-US-JennyNeural` |
-| `AZURE_OPENAI_API_VERSION` | Version de la API | `2024-10-21` |
-| `TWILIO_AUTH_TOKEN` | Token para validar firmas Twilio | – |
-| `TWILIO_VALIDATE_SIGNATURE` | Validar firma de Twilio | `true` |
-| `OLLAMA_URL` | URL de Ollama (fallback LLM) | – |
-| `OLLAMA_MODEL` | Modelo Ollama | `qwen2.5:3b` |
-| `DOCKER_TTS_URL` | URL de Piper TTS local | – |
+| Variable | Default | Descripcion |
+|----------|---------|-------------|
+| `PORT` | `4000` | Puerto del servidor |
+| `AZURE_TTS_VOICE_ES` | `es-MX-DaliaNeural` | Voz neuronal espanol |
+| `AZURE_TTS_VOICE_EN` | `en-US-JennyNeural` | Voz neuronal ingles |
+| `AZURE_OPENAI_API_VERSION` | `2024-10-21` | Version API |
+| `VOICE_SIMULATOR_ENABLED` | `true` | Habilitar `/test` |
 
-### 8.2 Docker (recomendado)
+### 8.2 Docker
 
-```bash
-# Clonar y configurar
-cd "Receptionist IA"
-cp .env.example .env
-# Editar .env con tus credenciales
-
-# Construir y levantar
+```powershell
+cd "D:\Disco E trabajos\repositorio_blindsbook\Receptionist IA"
 docker compose up -d --build
-
-# Verificar
-curl http://localhost:4100/health
+Invoke-RestMethod http://localhost:4100/health
 ```
 
-El `docker-compose.yml` mapea:
 - Host `127.0.0.1:4100` → Container `:4000`
-- Monta `./public:/app/public:ro` para cambios en archivos estaticos sin rebuild
+- `./public:/app/public:ro` — cambios estaticos sin rebuild
+- Limite de memoria: 512MB
 
-El `Dockerfile.cloud` usa multi-stage build:
-1. **Builder**: compila TypeScript a JavaScript
-2. **Runtime**: solo Node.js + dependencias de produccion (~200MB)
-
-### 8.3 Desarrollo local (sin Docker)
+### 8.3 Desarrollo local
 
 ```bash
 npm install
-npm run dev    # ts-node con watch
+npm run dev    # tsx watch src/index.ts — puerto 4000
 ```
-
-El servidor escucha en `http://localhost:4000`.
-
-### 8.4 Recursos Azure necesarios
-
-| Recurso | SKU recomendado | Proposito |
-|---------|----------------|-----------|
-| Azure OpenAI | S0 | LLM (gpt-4o-mini) |
-| Azure Speech | S0 | STT + TTS neuronal |
-| Azure OpenAI (Vision) | Mismo recurso | OCR con GPT-4o (opcional) |
-
-**Crear recurso Azure OpenAI:**
-1. Portal Azure → "Azure OpenAI" → Create
-2. Deploy modelo `gpt-4o-mini`
-3. Copiar Endpoint + API Key al `.env`
-
-**Crear recurso Azure Speech:**
-1. Portal Azure → "Speech services" → Create
-2. Copiar Key + Region al `.env`
 
 ---
 
@@ -434,127 +405,72 @@ El servidor escucha en `http://localhost:4000`.
 
 | Metodo | Ruta | Descripcion |
 |--------|------|-------------|
-| `GET` | `/health` | Estado del servicio (LLM, TTS, STT, sesiones activas) |
-| `POST` | `/debug/chat` | Simula turno de conversacion (texto) |
-| `POST` | `/debug/voice-chat` | Turno de conversacion + audio TTS |
-| `GET` | `/debug/play-audio?text=...&lang=es` | Genera MP3 de un texto |
-| `GET` | `/debug/customer-lookup?phone=...` | Busca cliente por telefono en todas las companias |
-| `GET` | `/tts/:id.mp3` | Sirve audio TTS cacheado |
-| `POST` | `/twilio/voice-webhook` | Webhook Twilio (TwiML) |
-| `POST` | `/ocr/window-frame` | Deteccion de marco de ventana |
-| `WS` | `/ws/voice` | WebSocket para voz en tiempo real |
-| `GET` | `/test/voice-test-v2.html` | UI de simulador de llamada |
-| `GET` | `/test/mic-test.html` | Diagnostico de microfono |
+| `GET` | `/health` | Estado del servicio |
+| `POST` | `/debug/chat` | Conversacion texto |
+| `POST` | `/debug/voice-chat` | Conversacion + audio TTS |
+| `GET` | `/debug/play-audio?text=...&lang=es` | Genera MP3 |
+| `GET` | `/debug/customer-lookup?phone=...` | Busca cliente |
+| `GET` | `/tts/:id.mp3` | Audio TTS cacheado |
+| `POST` | `/ocr/window-frame` | Deteccion de marco |
+| `WS` | `/ws/voice` | WebSocket voz en tiempo real |
+| `GET` | `/test/*` | Simulador (si habilitado) |
 
 ---
 
-## 10. Pruebas
-
-### 10.1 Simulador de llamada (navegador)
-
-Abrir `http://localhost:4100/test/voice-test-v2.html`:
-1. Ingresar numero de telefono del cliente
-2. Click en "Llamar"
-3. Seleccionar idioma
-4. Conversar por voz o texto
-
-### 10.2 Chat por texto (cURL / PowerShell)
-
-```bash
-# Inicio de conversacion
-curl -X POST http://localhost:4100/debug/chat \
-  -H "Content-Type: application/json" \
-  -d '{"callId":"test-1","text":null,"fromNumber":"+13055452936","toNumber":"+15550000001"}'
-
-# Seleccionar espanol
-curl -X POST http://localhost:4100/debug/chat \
-  -H "Content-Type: application/json" \
-  -d '{"callId":"test-1","text":"1"}'
-
-# Solicitar cita
-curl -X POST http://localhost:4100/debug/chat \
-  -H "Content-Type: application/json" \
-  -d '{"callId":"test-1","text":"quiero agendar una cita de reparacion para manana a las 3 de la tarde"}'
-```
-
-### 10.3 Busqueda de clientes
-
-```bash
-curl "http://localhost:4100/debug/customer-lookup?phone=3055452936"
-```
-
-### 10.4 Health check
-
-```bash
-curl http://localhost:4100/health
-```
-
-Respuesta esperada:
-```json
-{
-  "ok": true,
-  "service": "blindsbook-ia",
-  "status": "healthy",
-  "llm": "azure-openai",
-  "tts": "azure-speech-sdk",
-  "stt": "azure-speech-sdk",
-  "voiceWebSocket": "ready",
-  "sessions": {
-    "active": 0,
-    "max": 20,
-    "tts": { "active": 0, "queued": 0, "max": 15 }
-  }
-}
-```
-
-Para escenarios de prueba detallados, ver [`GUIA_PRUEBAS_MANUALES.md`](GUIA_PRUEBAS_MANUALES.md).
-
----
-
-## 11. Dependencias principales
+## 10. Dependencias principales
 
 | Paquete | Uso |
 |---------|-----|
 | `express` | Servidor HTTP |
 | `ws` | WebSocket server |
 | `microsoft-cognitiveservices-speech-sdk` | Azure Speech (STT + TTS) |
-| `axios` | Cliente HTTP para API BlindsBook |
+| `axios` | Cliente HTTP |
 | `chrono-node` | Parser de fechas en lenguaje natural |
-| `twilio` | SDK de Twilio para validacion de webhooks |
 | `sharp` | Procesamiento de imagenes (OCR) |
 | `zod` | Validacion de schemas |
 | `dotenv` | Variables de entorno |
-| `body-parser` / `cors` | Middleware Express |
+
+---
+
+## 11. Telefonia en produccion: ACS + Voice Live API
+
+El canal de voz en produccion utiliza **Azure Communication Services (ACS)** y **Azure AI Voice Live API**, reemplazando a Twilio que era el proveedor anterior.
+
+### Ventajas sobre Twilio
+
+| Caracteristica | Twilio (antes) | ACS + Voice Live (ahora) |
+|---|---|---|
+| STT/TTS | Pipeline propio (Azure Speech SDK) | Gestionado por Voice Live |
+| VAD | Timeout de silencio fijo (1-2s) | Semantico multilingue (`azure_semantic_vad_multilingual`) |
+| Echo cancellation | No | Si, del lado del servidor |
+| Voces | Neuronales estandar | HD con temperatura configurable |
+| Function calling | Via nuestro dialogo manager | Directo desde Voice Live |
+| Escalamiento | STT/TTS por sesion en nuestro server | Gestionado por Azure |
+
+### Estado actual
+
+- El **WebSocket `/ws/voice`** sigue siendo la interfaz principal del agente de voz
+- ACS se conecta mediante un **puente** que reenvía audio bidireccional a Voice Live
+- La variable de entorno se llama **`PHONE_TO_COMPANY_MAP`**
+
+Para detalles tecnicos, ver:
+- `docs/ACS_VOICE_LIVE_INTEGRATION.md` — Arquitectura del puente ACS
+- `docs/PLAN_VOICE_AGENT_ACS_VOICE_LIVE.md` — Plan de fases y criterios
 
 ---
 
 ## 12. Troubleshooting
 
-### El simulador se queda en "Conectando con IA..."
-- Verificar que Docker esta corriendo: `docker ps`
-- Verificar logs: `docker logs receptionistia-blindsbook-ia-1 --tail 30`
-- Verificar que el puerto 4100 esta accesible: `curl http://localhost:4100/health`
+| Problema | Solucion |
+|----------|----------|
+| Simulador en "Conectando..." | Verificar Docker: `docker ps`, logs: `docker compose logs --tail 30 blindsbook-ia` |
+| TokenManager falla | Verificar `BLINDSBOOK_LOGIN_EMAIL`/`PASSWORD`, acceso a API |
+| Voz robotica / sin audio | Verificar `AZURE_SPEECH_KEY`/`REGION`. Probar: `/debug/play-audio?text=Hola&lang=es` |
+| `"llm": "none"` | Variables Azure OpenAI vacias. `docker compose exec blindsbook-ia printenv \| grep AZURE_OPENAI` |
+| Identificacion lenta | Cache 5 min. Primera busqueda ~3s, Cold start API ~10-15s |
+| Puerto 4100 en uso | `netstat -ano \| findstr :4100`. Cambiar en `docker-compose.yml` |
+| Cambios en src/ no se ven | Requiere rebuild: `docker compose up --build -d` |
 
-### TokenManager falla al autenticarse
-- Verificar credenciales en `.env`: `BLINDSBOOK_LOGIN_EMAIL` y `BLINDSBOOK_LOGIN_PASSWORD`
-- Verificar que la API BlindsBook es accesible desde Docker: `BLINDSBOOK_API_BASE_URL`
-- Si una compania especifica falla (401), verificar que el superusuario tiene permisos para esa compania
+---
 
-### La voz suena robotica
-- Verificar que `AZURE_SPEECH_KEY` y `AZURE_SPEECH_REGION` estan configurados
-- Verificar voces en `.env`: `AZURE_TTS_VOICE_ES=es-MX-JorgeNeural`
-- El sistema usa SSML con prosodia y estilos emocionales para naturalidad
-
-### Identificacion de cliente muy lenta (>10s)
-- La busqueda usa `quick-search` endpoint optimizado de la API BlindsBook
-- Verificar cache: primera busqueda ~3s, siguientes <1ms (cache 5 min)
-- Timeout maximo: 18s (configurable en `manager.ts`)
-
-### Puerto 4100 en uso
-- Docker mapea 4100 (host) → 4000 (container)
-- Verificar procesos: `netstat -ano | findstr :4100`
-- Cambiar puerto en `docker-compose.yml` si hay conflicto
-
-### Docker no refleja cambios en el codigo
-- Los archivos en `src/` requieren rebuild: `docker compose up --build -d`
-- Los archivos en `public/` se reflejan inmediatamente (volume mount)
+*Ultima actualizacion: Marzo 2026*

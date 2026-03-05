@@ -10,6 +10,8 @@ import {
   synthesizeSpeechStreaming,
   getTtsStats,
 } from '../tts/azureSpeechSdkTts.js';
+
+const USE_STREAMING_TTS_FOR_SENTENCES = true;
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from '../dialogue/manager.js';
 
 const MAX_CONCURRENT_SESSIONS = 20;
@@ -28,6 +30,11 @@ interface VoiceSession {
   lastActivity: number;
   interimText: string;
   silenceTimer: NodeJS.Timeout | null;
+  currentTtsId: string | undefined;
+  pendingBargeIn: boolean;
+  initAt: number;
+  languageSelectedAt: number | null;
+  speechFinalAt: number | null;
 }
 
 interface WsMessage {
@@ -80,6 +87,11 @@ export function setupVoiceWebSocket(server: HttpServer): WebSocketServer {
       lastActivity: Date.now(),
       interimText: '',
       silenceTimer: null,
+      currentTtsId: undefined,
+      pendingBargeIn: false,
+      initAt: Date.now(),
+      languageSelectedAt: null,
+      speechFinalAt: null,
     };
 
     sessions.set(sessionId, session);
@@ -226,7 +238,9 @@ async function handleInit(
 
     console.log(`[Voice WS] Init response ready: step=${result.state.step}, text="${result.replyText.substring(0, 60)}..."`);
 
-    // Send text immediately without waiting for TTS
+    const tConnectToGreeting = Date.now() - session.initAt;
+    console.log(`[Voice WS] t_connect_to_greeting=${tConnectToGreeting}ms`);
+
     send(session.ws, {
       type: 'greeting',
       text: result.replyText,
@@ -234,9 +248,14 @@ async function handleInit(
     });
 
     // Non-blocking TTS — failure should not break the flow
-    speakResponse(session, result.replyText).catch(err => {
+    const ttsPromise = speakResponse(session, result.replyText).catch(err => {
       console.error(`[Voice WS] TTS failed during init (non-blocking):`, err);
     });
+
+    // If past language selection (e.g. caller already identified), start listening for speech
+    if (!result.isFinished && result.state.step !== 'askLanguage') {
+      ttsPromise.then(() => startListening(session)).catch(() => startListening(session));
+    }
   } catch (err) {
     console.error(`[Voice WS] handleInit error:`, err);
     send(session.ws, { type: 'greeting', text: 'Para español, presione 1. For English, press 2.', state: {} });
@@ -248,6 +267,7 @@ async function handleLanguageSelect(
   data: { language: SpeechLanguage }
 ) {
   session.language = data.language;
+  session.languageSelectedAt = Date.now();
   const choice = data.language === 'es' ? '1' : '2';
 
   console.log(`[Voice WS] Language selected: ${session.language} for session ${session.id}`);
@@ -257,6 +277,11 @@ async function handleLanguageSelect(
     setConversationState(session.id, result.state);
 
     console.log(`[Voice WS] Language response ready: step=${result.state.step}, text="${result.replyText.substring(0, 60)}..."`);
+
+    if (session.languageSelectedAt != null && result.state.step === 'greeting' && (result.state as { customerId?: number }).customerId) {
+      const tLangToIdentified = Date.now() - session.languageSelectedAt;
+      console.log(`[Voice WS] t_language_to_identified_greeting=${tLangToIdentified}ms`);
+    }
 
     send(session.ws, {
       type: 'state',
@@ -316,7 +341,18 @@ async function handleTextInput(session: VoiceSession, data: { text: string }) {
   }
 }
 
+function cancelCurrentSpeech(session: VoiceSession): void {
+  session.isSpeaking = false;
+  session.currentTtsId = undefined;
+  session.pendingBargeIn = true;
+  send(session.ws, { type: 'state', data: { speaking: false } });
+}
+
 async function handleAudioData(session: VoiceSession, audioBuffer: Buffer) {
+  if (session.isSpeaking) {
+    cancelCurrentSpeech(session);
+    await startListening(session);
+  }
   if (!session.recognizer || !session.isListening) return;
 
   const arrayBuffer = audioBuffer.buffer.slice(
@@ -351,7 +387,7 @@ async function startListening(session: VoiceSession) {
 
   session.recognizer = createPushStreamRecognizer({
     language: session.language,
-    silenceTimeoutMs: 1500,
+    silenceTimeoutMs: 1000,
 
     onInterim: (result) => {
       session.interimText = result.text;
@@ -406,25 +442,38 @@ async function stopListening(session: VoiceSession) {
 async function processSpeechResult(session: VoiceSession, text: string) {
   console.log(`[Voice WS] Processing speech: "${text}"`);
 
+  if (session.silenceTimer) {
+    clearTimeout(session.silenceTimer);
+    session.silenceTimer = null;
+  }
+  session.speechFinalAt = Date.now();
   await stopListening(session);
   session.isSpeaking = true;
   session.interimText = '';
 
-  const result = await handleUserInput(session.id, text);
-  setConversationState(session.id, result.state);
+  try {
+    const result = await handleUserInput(session.id, text);
+    setConversationState(session.id, result.state);
 
-  send(session.ws, {
-    type: result.isFinished ? 'finished' : 'final',
-    text: result.replyText,
-    state: result.state,
-  });
+    send(session.ws, {
+      type: result.isFinished ? 'finished' : 'final',
+      text: result.replyText,
+      state: result.state,
+    });
 
-  await speakResponse(session, result.replyText);
+    await speakResponse(session, result.replyText);
 
-  session.isSpeaking = false;
+    session.isSpeaking = false;
 
-  if (!result.isFinished) {
-    await startListening(session);
+    if (!result.isFinished) {
+      await startListening(session);
+    }
+  } catch (err) {
+    console.error(`[Voice WS] processSpeechResult error for session ${session.id}:`, err);
+    session.isSpeaking = false;
+    send(session.ws, { type: 'error', text: `Processing error: ${String(err)}` });
+    // Resume listening to avoid dead sessions
+    await startListening(session).catch(() => {});
   }
 }
 
@@ -440,6 +489,10 @@ function estimatePlaybackMs(byteLength: number): number {
 async function speakResponse(session: VoiceSession, text: string) {
   if (!text.trim()) return;
 
+  const ttsId = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  session.currentTtsId = ttsId;
+  session.pendingBargeIn = false;
+
   try {
     session.isSpeaking = true;
     send(session.ws, { type: 'state', data: { speaking: true } });
@@ -449,36 +502,72 @@ async function speakResponse(session: VoiceSession, text: string) {
     console.log(`[Voice WS] TTS streaming ${sentences.length} sentence(s) for session ${session.id}`);
 
     for (let i = 0; i < sentences.length; i++) {
+      if (session.currentTtsId !== ttsId) break;
       const sentence = sentences[i]!;
       if (!sentence.trim()) continue;
 
       const isLast = i === sentences.length - 1;
       const sentenceStart = Date.now();
+      let firstChunkMs: number | null = null;
+      let sentenceByteLength = 0;
 
-      const { bytes } = await synthesizeSpeech(sentence, session.language);
+      if (USE_STREAMING_TTS_FOR_SENTENCES) {
+        await synthesizeSpeechStreaming(sentence, session.language, {
+          onAudioChunk: (chunk) => {
+            if (session.currentTtsId !== ttsId || session.ws.readyState !== WebSocket.OPEN) return;
+            if (firstChunkMs === null) {
+              firstChunkMs = Date.now() - sentenceStart;
+              if (session.speechFinalAt != null && i === 0) {
+                const tUserFinalToFirstChunk = Date.now() - session.speechFinalAt;
+                console.log(`[Voice WS] t_user_final_to_first_audio_chunk=${tUserFinalToFirstChunk}ms`);
+              }
+            }
+            sentenceByteLength += chunk.length;
+            send(session.ws, {
+              type: 'audio',
+              audioBase64: chunk.toString('base64'),
+              text: sentence,
+              data: { sentenceIndex: i, totalSentences: sentences.length, isLastChunk: isLast },
+            });
+          },
+          onComplete: () => {},
+          onError: () => {},
+        });
+      } else {
+        const { bytes } = await synthesizeSpeech(sentence, session.language);
+        sentenceByteLength = bytes.length;
+        if (session.currentTtsId !== ttsId || session.ws.readyState !== WebSocket.OPEN) break;
+        if (session.speechFinalAt != null && i === 0) {
+          const tUserFinalToFirstChunk = Date.now() - session.speechFinalAt;
+          console.log(`[Voice WS] t_user_final_to_first_audio_chunk=${tUserFinalToFirstChunk}ms`);
+        }
+        send(session.ws, {
+          type: 'audio',
+          audioBase64: bytes.toString('base64'),
+          text: sentence,
+          data: { sentenceIndex: i, totalSentences: sentences.length, isLastChunk: isLast },
+        });
+      }
 
-      if (session.ws.readyState !== WebSocket.OPEN) break;
+      if (session.currentTtsId !== ttsId) break;
+      const elapsed = Date.now() - sentenceStart;
+      console.log(`[Voice WS] Sentence ${i + 1}/${sentences.length} tts_ms=${elapsed} tts_bytes=${sentenceByteLength}${firstChunkMs != null ? ` first_chunk_ms=${firstChunkMs}` : ''}`);
 
-      send(session.ws, {
-        type: 'audio',
-        audioBase64: bytes.toString('base64'),
-        text: sentence,
-        data: { sentenceIndex: i, totalSentences: sentences.length, isLastChunk: isLast },
-      });
-
-      console.log(`[Voice WS] Sentence ${i + 1}/${sentences.length} sent in ${Date.now() - sentenceStart}ms (${bytes.length} bytes)`);
-
-      const playbackMs = estimatePlaybackMs(bytes.length);
-      const overlapMs = isLast ? playbackMs + 150 : Math.max(playbackMs - 300, 200);
+      const playbackMs = estimatePlaybackMs(sentenceByteLength);
+      const overlapMs = USE_STREAMING_TTS_FOR_SENTENCES ? (isLast ? 150 : 200) : (isLast ? playbackMs + 150 : Math.max(playbackMs - 300, 200));
       await new Promise(resolve => setTimeout(resolve, overlapMs));
     }
 
-    console.log(`[Voice WS] TTS complete in ${Date.now() - totalStart}ms`);
-
+    if (session.currentTtsId === ttsId) {
+      console.log(`[Voice WS] TTS complete in ${Date.now() - totalStart}ms`);
+    }
   } catch (error) {
     console.error(`[Voice WS] TTS error for session ${session.id}:`, error);
     send(session.ws, { type: 'error', text: `Speech synthesis error: ${String(error)}` });
   } finally {
+    if (session.currentTtsId === ttsId) {
+      session.currentTtsId = undefined;
+    }
     session.isSpeaking = false;
     send(session.ws, { type: 'state', data: { speaking: false } });
   }

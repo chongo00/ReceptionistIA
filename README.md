@@ -7,14 +7,14 @@ Agente de call center automatizado que atiende llamadas telefonicas, identifica 
 - **Runtime:** Node.js 22+ / TypeScript
 - **LLM:** Azure OpenAI (gpt-4o-mini) — Ollama como fallback
 - **Voz:** Azure Speech SDK (STT + TTS neuronal)
-- **Telefonia:** Twilio (produccion) / WebSocket (desarrollo)
+- **Telefonia:** ACS + Voice Live API (produccion) / WebSocket (desarrollo)
 - **Backend:** API BlindsBook (NestJS / SQL Server)
 - **Container:** Docker multi-stage (~200MB)
 
 ## Arquitectura
 
 ```
-    Twilio / WebSocket ──→ Express (4000)
+    ACS / WebSocket ──→ Express (4000)
                               │
                    ┌──────────┴──────────┐
                    │  Dialogue Manager   │  OCR Controller
@@ -62,7 +62,7 @@ npm run dev
 | `BLINDSBOOK_API_BASE_URL` | URL de la API BlindsBook |
 | `BLINDSBOOK_LOGIN_EMAIL` | Email superusuario |
 | `BLINDSBOOK_LOGIN_PASSWORD` | Password superusuario |
-| `TWILIO_NUMBER_TO_COMPANY_MAP` | Mapeo numeros → companias (JSON) |
+| `PHONE_TO_COMPANY_MAP` | Mapeo numeros → companias (JSON) |
 
 Ver `.env.example` para la lista completa.
 
@@ -85,7 +85,6 @@ Llamada entra → Seleccion de idioma (ES/EN)
 | `POST` | `/debug/chat` | Simula conversacion por texto |
 | `POST` | `/debug/voice-chat` | Conversacion + audio TTS |
 | `GET` | `/debug/customer-lookup?phone=...` | Busqueda de clientes |
-| `POST` | `/twilio/voice-webhook` | Webhook Twilio |
 | `POST` | `/ocr/window-frame` | OCR marco de ventana |
 
 ## Documentacion

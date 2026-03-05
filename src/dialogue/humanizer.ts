@@ -135,11 +135,11 @@ export function enrichSsmlBody(text: string): string {
   result = result.replace(/\n\n/g, ' <break time="300ms"/> ');
   result = result.replace(/\n/g, ' <break time="150ms"/> ');
 
-  result = result.replace(/\.\s+(?!<break)/g, '. <break time="150ms"/> ');
+  result = result.replace(/\.\s+(?!<break)/g, '. <break time="250ms"/> ');
   result = result.replace(/!\s+(?!<break)/g, '! <break time="120ms"/> ');
   result = result.replace(/\?\s+(?!<break)/g, '? <break time="100ms"/> ');
 
-  result = result.replace(/,\s+(?!<break)/g, ', <break time="60ms"/> ');
+  result = result.replace(/,\s+(?!<break)/g, ', <break time="150ms"/> ');
 
   result = result.replace(/\s+(pero|however|but|aunque|although)\s+/gi, ' <break time="80ms"/> $1 ');
   result = result.replace(/\s+(entonces|so|pues)\s+/gi, ' <break time="60ms"/> $1 ');

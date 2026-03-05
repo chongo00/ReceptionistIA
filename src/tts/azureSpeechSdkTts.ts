@@ -11,7 +11,7 @@ interface VoiceProfile {
 }
 
 const DEFAULT_VOICES: Readonly<Record<SpeechLang, VoiceProfile>> = {
-  es: { name: 'es-MX-JorgeNeural', style: 'cheerful', styleDegree: 0.8 },
+  es: { name: 'es-MX-DaliaNeural', style: 'cheerful', styleDegree: 0.8 },
   en: { name: 'en-US-JennyNeural', style: 'friendly', styleDegree: 0.9 },
 };
 
@@ -81,14 +81,14 @@ function buildNaturalSsml(text: string, voice: VoiceProfile): string {
   if (voice.style) {
     voiceContent = `
       <mstts:express-as style="${voice.style}" styledegree="${voice.styleDegree ?? 1}">
-        <prosody rate="+3%" pitch="+1%">
+        <prosody rate="0%" pitch="+1%">
           ${enrichedBody}
         </prosody>
       </mstts:express-as>
     `;
   } else {
     voiceContent = `
-      <prosody rate="+3%" pitch="+1%">
+      <prosody rate="0%" pitch="+1%">
         ${enrichedBody}
       </prosody>
     `;

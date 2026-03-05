@@ -26,7 +26,6 @@
     "microsoft-cognitiveservices-speech-sdk": "^1.48.0",
     "mssql": "^12.2.0",
     "sharp": "^0.34.5",
-    "twilio": "^5.4.0",
     "ws": "^8.19.0",
     "zod": "^3.24.1"
   },
