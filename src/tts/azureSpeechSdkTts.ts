@@ -45,7 +45,7 @@ function createSpeechConfig(voice: VoiceProfile): sdk.SpeechConfig {
   return cfg;
 }
 
-const MAX_CONCURRENT_TTS = 15;
+const MAX_CONCURRENT_TTS = loadEnv().maxConcurrentTts;
 let _activeTts = 0;
 const _ttsQueue: Array<{ resolve: () => void }> = [];
 

@@ -23,6 +23,8 @@ export interface EnvConfig {
   azureOpenaiDeployment: string | null;
   azureOpenaiApiVersion: string;
   voiceSimulatorEnabled: boolean;
+  maxConcurrentSessions: number;
+  maxConcurrentTts: number;
 }
 
 let _cached: EnvConfig | null = null;
@@ -60,6 +62,8 @@ export function loadEnv(): EnvConfig {
     azureOpenaiDeployment: process.env.AZURE_OPENAI_DEPLOYMENT || null,
     azureOpenaiApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-10-21',
     voiceSimulatorEnabled: process.env.VOICE_SIMULATOR_ENABLED !== 'false',
+    maxConcurrentSessions: Number(process.env.MAX_CONCURRENT_SESSIONS || 20),
+    maxConcurrentTts: Number(process.env.MAX_CONCURRENT_TTS || 25),
   };
 
   return _cached;

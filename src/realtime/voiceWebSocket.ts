@@ -13,8 +13,10 @@ import {
 
 const USE_STREAMING_TTS_FOR_SENTENCES = true;
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from '../dialogue/manager.js';
+import { loadEnv } from '../config/env.js';
 
-const MAX_CONCURRENT_SESSIONS = 20;
+const env = loadEnv();
+const MAX_CONCURRENT_SESSIONS = env.maxConcurrentSessions;
 const SILENCE_TIMEOUT_MS = 2000;
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 min inactivity
 

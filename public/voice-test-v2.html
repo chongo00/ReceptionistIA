@@ -226,6 +226,13 @@ var audioContext = null;
 var isRecording = false;
 var currentAudio = null;
 
+// Persistent AudioContext for playback (survives across calls)
+var playbackCtx = null;
+
+// Audio queue for sequential playback
+var audioQueue = [];
+var isPlayingAudio = false;
+
 // Init que está pendiente de enviarse (para evitar carreras con ws.onopen)
 var pendingInitData = null;
 
@@ -437,13 +444,14 @@ function sendTextMsg() {
 function hangUp() {
   callActive = false;
   stopRecording();
+  stopPlayback();
   clearInterval(callTimerInterval);
   document.getElementById('callTimer').className = 'call-timer';
-  
+
   if (ws) {
     ws.send(JSON.stringify({ type: 'hangup' }));
   }
-  
+
   setMicState('paused');
   setStatusBar('idle', '📵 Llamada finalizada');
   addMessage('system', '📵 Llamada terminada');
@@ -455,9 +463,16 @@ function newCall() {
   chosenLanguage = null;
   sessionId = null;
   stopRecording();
+  stopPlayback();
   clearInterval(callTimerInterval);
-  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-  
+
+  // Close the existing WebSocket so the server cleans up the old session
+  if (ws) {
+    try { ws.send(JSON.stringify({ type: 'hangup' })); } catch(e) {}
+    try { ws.close(); } catch(e) {}
+    ws = null;
+  }
+
   document.getElementById('callScreen').className = 'panel call-screen';
   document.getElementById('dialerPanel').style.display = 'block';
   document.getElementById('btnCall').disabled = false;
@@ -467,11 +482,15 @@ function newCall() {
   document.getElementById('callTimer').textContent = '00:00';
   document.getElementById('customerPhone').value = '';
   document.getElementById('transcript').innerHTML = '';
+  document.getElementById('finishedOverlay').className = 'finished-overlay';
+
+  setConnectionStatus('disconnected', 'Desconectado');
 }
 
 function showFinished(state) {
   callActive = false;
   stopRecording();
+  stopPlayback();
   clearInterval(callTimerInterval);
   document.getElementById('callTimer').className = 'call-timer';
   
@@ -567,35 +586,73 @@ function stopRecording() {
 }
 
 // ═══ AUDIO PLAYBACK (Server → Browser) ═══
+// Uses Web Audio API for reliable playback — immune to autoplay restrictions
+// after a user gesture has resumed the AudioContext.
+
+function getPlaybackCtx() {
+  if (!playbackCtx || playbackCtx.state === 'closed') {
+    playbackCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (playbackCtx.state === 'suspended') {
+    playbackCtx.resume();
+  }
+  return playbackCtx;
+}
+
 function playAudio(base64) {
   if (!base64) return;
-  
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
-  
+
+  // Enqueue and kick the sequential player
+  audioQueue.push(base64);
   setMicState('speaking');
-  
-  var audio = new Audio('data:audio/mpeg;base64,' + base64);
-  currentAudio = audio;
-  
-  audio.onended = function() {
+  if (!isPlayingAudio) {
+    playNextChunk();
+  }
+}
+
+function playNextChunk() {
+  if (audioQueue.length === 0) {
+    isPlayingAudio = false;
     currentAudio = null;
     if (callActive && isRecording) {
       setMicState('listening');
     }
-  };
-  
-  audio.onerror = function() {
-    currentAudio = null;
-    log('⚠️ Error reproduciendo audio', 'warn');
-  };
-  
-  audio.play().catch(function(err) {
-    log('⚠️ Autoplay bloqueado: ' + err.message, 'warn');
-    addMessage('system', '⚠️ Haz clic en la página para permitir audio');
+    return;
+  }
+
+  isPlayingAudio = true;
+  var base64 = audioQueue.shift();
+
+  // Decode base64 → ArrayBuffer
+  var binaryStr = atob(base64);
+  var len = binaryStr.length;
+  var bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+  var ctx = getPlaybackCtx();
+  ctx.decodeAudioData(bytes.buffer, function(audioBuffer) {
+    var source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+    currentAudio = source;
+    source.onended = function() {
+      playNextChunk();
+    };
+    source.start(0);
+  }, function(err) {
+    log('⚠️ Error decodificando audio: ' + (err && err.message || err), 'warn');
+    // Skip bad chunk and continue
+    playNextChunk();
   });
+}
+
+function stopPlayback() {
+  audioQueue = [];
+  isPlayingAudio = false;
+  if (currentAudio) {
+    try { currentAudio.stop(); } catch(e) {}
+    currentAudio = null;
+  }
 }
 
 // ═══ UI UPDATES ═══
@@ -690,16 +747,14 @@ function toggleDebug() {
 
 // ═══ INIT ═══
 window.addEventListener('load', function() {
-  // Enable audio autoplay on first interaction
+  // Unlock the playback AudioContext on the first user gesture
   document.addEventListener('click', function() {
-    try {
-      var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      ctx.resume().then(function() { ctx.close(); });
-    } catch(e) {}
+    var ctx = getPlaybackCtx();
+    if (ctx.state === 'suspended') ctx.resume();
   }, { once: true });
-  
+
   log('🚀 Voice Test v2 cargado', 'ok');
-  
+
   // Auto-connect
   setTimeout(connect, 500);
 });
