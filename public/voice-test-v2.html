@@ -123,7 +123,7 @@
 <div class="header">
   <h1><span class="phone-icon">📞</span> BlindsBook — Simulador de Llamada v2</h1>
   <p class="subtitle">Reconocimiento de voz profesional con Azure Speech SDK</p>
-  <span class="badge">🎤 Azure STT + TTS Neural</span>
+  <span class="badge" id="backendBadge">Local: Azure Speech SDK</span>
 </div>
 
 <!-- CONNECTION STATUS -->
@@ -139,7 +139,17 @@
     <input type="text" id="customerPhone" placeholder="Teléfono del cliente (opcional)" autocomplete="off" />
     <button class="btn btn-call" id="btnCall" onclick="startCall()">📞 Llamar</button>
   </div>
+  <div class="dialer-row" style="margin-top:8px;">
+    <label style="color:var(--mute);font-size:.85rem;display:flex;align-items:center;gap:8px;flex:1;">
+      Motor de voz:
+      <select id="voiceBackend" style="flex:1;background:#1a2440;border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:.9rem;">
+        <option value="local">Local (Azure Speech SDK)</option>
+        <option value="voice_live">Voice Live API</option>
+      </select>
+    </label>
+  </div>
   <p style="color:var(--mute);font-size:.75rem;margin-top:8px;">Puedes dejar el teléfono vacío para una prueba rápida.</p>
+  <p id="wsHostHint" style="color:var(--mute);font-size:.7rem;margin-top:4px;display:none;"></p>
 </div>
 
 <!-- CALL SCREEN -->
@@ -208,10 +218,30 @@
 // BlindsBook Voice Test v2 — WebSocket + Azure Speech SDK
 // ═══════════════════════════════════════════════════════════════
 
-// Detecta dinámicamente el host/puerto actual para evitar puertos fijos
-var origin = window.location.origin; // p.ej. http://localhost:4100
+// Host del WebSocket: por defecto el mismo que la página. Si abres desde otro puerto (p.ej. 4108),
+// usa ?wsHost=localhost:4100 en la URL para conectar al backend correcto.
+var wsHost = (function() {
+  var params = new URLSearchParams(window.location.search);
+  var host = params.get('wsHost');
+  if (host) return host.replace(/^https?:\/\//, '');
+  return window.location.host;
+})();
+var origin = window.location.origin;
 var API_BASE = origin;
-var WS_URL = (origin.startsWith('https') ? 'wss://' : 'ws://') + window.location.host + '/ws/voice';
+
+function getWsUrl() {
+  var backend = document.getElementById('voiceBackend').value;
+  var wsPath = backend === 'voice_live' ? '/ws/voice-live-test' : '/ws/voice';
+  var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return protocol + '//' + wsHost + wsPath;
+}
+
+(function showWsHostHint() {
+  if (wsHost !== window.location.host) {
+    var el = document.getElementById('wsHostHint');
+    if (el) { el.style.display = 'block'; el.textContent = 'WebSocket en ' + wsHost + ' (página en ' + window.location.host + '). Si falla, abre http://' + wsHost + '/test/voice-test-v2.html'; }
+  }
+})();
 
 // State
 var ws = null;
@@ -240,10 +270,11 @@ var pendingInitData = null;
 function connect() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
   
+  var url = getWsUrl();
   setConnectionStatus('connecting', 'Conectando...');
-  log('🔌 Conectando a WebSocket...', 'warn');
+  log('🔌 Conectando a ' + url, 'warn');
   
-  ws = new WebSocket(WS_URL);
+  ws = new WebSocket(url);
   
   ws.onopen = function() {
     log('✅ WebSocket conectado', 'ok');
@@ -270,7 +301,7 @@ function connect() {
   };
   
   ws.onerror = function(err) {
-    log('❌ Error WebSocket', 'err');
+    log('❌ Error WebSocket. Comprueba que la página sea http://localhost:4100/test/... y que el contenedor esté en marcha (docker compose ps).', 'err');
     setConnectionStatus('disconnected', 'Error de conexión');
   };
 }
@@ -755,8 +786,21 @@ window.addEventListener('load', function() {
 
   log('🚀 Voice Test v2 cargado', 'ok');
 
-  // Auto-connect
-  setTimeout(connect, 500);
+  // Backend selector badge
+  var backendSel = document.getElementById('voiceBackend');
+  backendSel.addEventListener('change', function() {
+    var badge = document.getElementById('backendBadge');
+    if (this.value === 'voice_live') {
+      badge.textContent = 'Voice Live API';
+      badge.style.background = '#6366f1';
+    } else {
+      badge.textContent = 'Local: Azure Speech SDK';
+      badge.style.background = '';
+    }
+  });
+
+  // No auto-connect; connection happens when user clicks 'Llamar'
+  // (the backend selector must be chosen first)
 });
 </script>
 </body>

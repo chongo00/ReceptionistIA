@@ -13,7 +13,9 @@ import {
 
 const USE_STREAMING_TTS_FOR_SENTENCES = true;
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from '../dialogue/manager.js';
-import { loadEnv } from '../config/env.js';
+import { loadEnv, isVoiceLiveConfigured } from '../config/env.js';
+import { VoiceLiveClient, type VoiceLiveCallbacks } from '../voiceLive/client.js';
+import { pcmToWav } from '../voiceLive/audioUtils.js';
 
 const env = loadEnv();
 const MAX_CONCURRENT_SESSIONS = env.maxConcurrentSessions;
@@ -37,6 +39,11 @@ interface VoiceSession {
   initAt: number;
   languageSelectedAt: number | null;
   speechFinalAt: number | null;
+  // Voice Live integration (only used when voiceBackend === 'voice_live')
+  voiceBackend: 'local' | 'voice_live';
+  vlClient: VoiceLiveClient | null;
+  vlAudioAccumulator: Buffer[];
+  vlResponseResolve: (() => void) | null;
 }
 
 interface WsMessage {
@@ -61,7 +68,7 @@ export function getSessionStats() {
 }
 
 export function setupVoiceWebSocket(server: HttpServer): WebSocketServer {
-  const wss = new WebSocketServer({ server, path: '/ws/voice' });
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (ws, req) => {
     if (sessions.size >= MAX_CONCURRENT_SESSIONS) {
@@ -94,6 +101,10 @@ export function setupVoiceWebSocket(server: HttpServer): WebSocketServer {
       initAt: Date.now(),
       languageSelectedAt: null,
       speechFinalAt: null,
+      voiceBackend: (env.voiceBackend === 'voice_live' && isVoiceLiveConfigured()) ? 'voice_live' : 'local',
+      vlClient: null,
+      vlAudioAccumulator: [],
+      vlResponseResolve: null,
     };
 
     sessions.set(sessionId, session);
@@ -234,6 +245,16 @@ async function handleInit(
     }
   }
 
+  // Initialize Voice Live backend if configured
+  if (session.voiceBackend === 'voice_live') {
+    try {
+      await initVoiceLiveForSession(session);
+    } catch (err) {
+      console.error(`[Voice WS] Voice Live init failed, falling back to local:`, err);
+      session.voiceBackend = 'local';
+    }
+  }
+
   try {
     const result = await handleUserInput(session.id, null);
     setConversationState(session.id, result.state);
@@ -253,9 +274,7 @@ async function handleInit(
     const ttsPromise = speakResponse(session, result.replyText).catch(err => {
       console.error(`[Voice WS] TTS failed during init (non-blocking):`, err);
     });
-
-    // If past language selection (e.g. caller already identified), start listening for speech
-    if (!result.isFinished && result.state.step !== 'askLanguage') {
+    if (!result.isFinished) {
       ttsPromise.then(() => startListening(session)).catch(() => startListening(session));
     }
   } catch (err) {
@@ -351,6 +370,15 @@ function cancelCurrentSpeech(session: VoiceSession): void {
 }
 
 async function handleAudioData(session: VoiceSession, audioBuffer: Buffer) {
+  // Voice Live backend: forward audio directly
+  if (session.voiceBackend === 'voice_live') {
+    if (!session.vlClient?.connected) return;
+    session.lastActivity = Date.now();
+    session.vlClient.sendAudio(audioBuffer.toString('base64'));
+    return;
+  }
+
+  // Local backend: existing Azure Speech SDK pipeline
   if (session.isSpeaking) {
     cancelCurrentSpeech(session);
     await startListening(session);
@@ -376,6 +404,12 @@ async function handleAudioData(session: VoiceSession, audioBuffer: Buffer) {
 }
 
 async function startListening(session: VoiceSession) {
+  // Voice Live backend: VAD is handled automatically by Voice Live
+  if (session.voiceBackend === 'voice_live') {
+    send(session.ws, { type: 'state', data: { listening: true } });
+    return;
+  }
+
   if (session.isListening || session.isSpeaking) return;
   if (!isAzureSttConfigured()) {
     console.warn('[Voice WS] Azure STT not configured, using text-only mode');
@@ -425,6 +459,12 @@ async function startListening(session: VoiceSession) {
 }
 
 async function stopListening(session: VoiceSession) {
+  // Voice Live backend: VAD is handled by Voice Live, nothing to stop
+  if (session.voiceBackend === 'voice_live') {
+    send(session.ws, { type: 'state', data: { listening: false } });
+    return;
+  }
+
   if (!session.isListening || !session.recognizer) return;
 
   console.log(`[Voice WS] Stopping STT for session ${session.id}`);
@@ -491,6 +531,28 @@ function estimatePlaybackMs(byteLength: number): number {
 async function speakResponse(session: VoiceSession, text: string) {
   if (!text.trim()) return;
 
+  // Voice Live backend: use Voice Live TTS via response.create
+  if (session.voiceBackend === 'voice_live' && session.vlClient?.connected) {
+    session.isSpeaking = true;
+    send(session.ws, { type: 'state', data: { speaking: true } });
+
+    return new Promise<void>((resolve) => {
+      session.vlResponseResolve = resolve;
+      session.vlClient!.speakText(text);
+
+      // Safety timeout: resolve after 30s even if no response.done
+      setTimeout(() => {
+        if (session.vlResponseResolve === resolve) {
+          session.vlResponseResolve = null;
+          session.isSpeaking = false;
+          send(session.ws, { type: 'state', data: { speaking: false } });
+          resolve();
+        }
+      }, 30_000);
+    });
+  }
+
+  // Local backend: existing Azure Speech SDK TTS pipeline
   const ttsId = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   session.currentTtsId = ttsId;
   session.pendingBargeIn = false;
@@ -591,6 +653,12 @@ function cleanupSession(session: VoiceSession) {
     session.recognizer.stop().catch(() => {});
     session.recognizer = null;
   }
+  if (session.vlClient) {
+    session.vlClient.close();
+    session.vlClient = null;
+  }
+  session.vlAudioAccumulator = [];
+  session.vlResponseResolve = null;
   clearConversationState(session.id);
   sessions.delete(session.id);
 }
@@ -601,6 +669,114 @@ function send(ws: WebSocket, response: WsResponse) {
   }
 }
 
+// ── Voice Live integration helpers ──
+
+function resolveVoiceForVL(language: SpeechLanguage) {
+  return {
+    name: language === 'en'
+      ? (env.azureTtsVoiceEn || 'en-US-JennyNeural')
+      : (env.azureTtsVoiceEs || 'es-MX-DaliaNeural'),
+    type: 'azure-standard' as const,
+    temperature: 0.8,
+  };
+}
+
+async function initVoiceLiveForSession(session: VoiceSession): Promise<void> {
+  const callbacks = createVoiceLiveCallbacksForSession(session);
+  session.vlClient = new VoiceLiveClient(callbacks);
+
+  await session.vlClient.connect(
+    env.voiceLiveEndpoint!,
+    env.voiceLiveApiKey!,
+    env.voiceLiveModel!,
+    env.voiceLiveApiVersion,
+  );
+
+  session.vlClient.sendSessionUpdate({
+    instructions: 'You are a receptionist. When given specific text to repeat, you must repeat it exactly without changes.',
+    turn_detection: {
+      type: 'azure_semantic_vad_multilingual',
+      create_response: false,
+      silence_duration_ms: 500,
+      languages: [session.language === 'en' ? 'en' : 'es', session.language === 'en' ? 'es' : 'en'],
+    },
+    input_audio_noise_reduction: { type: 'azure_deep_noise_suppression' },
+    input_audio_echo_cancellation: { type: 'server_echo_cancellation' },
+    input_audio_sampling_rate: 16000,
+    voice: resolveVoiceForVL(session.language),
+    modalities: ['text', 'audio'],
+    input_audio_transcription: { model: 'azure-speech', language: session.language },
+  });
+
+  console.log(`[Voice WS] Voice Live backend initialized for ${session.id}`);
+}
+
+function createVoiceLiveCallbacksForSession(session: VoiceSession): VoiceLiveCallbacks {
+  return {
+    onSessionCreated: () => {
+      console.log(`[Voice WS] Voice Live session created for ${session.id}`);
+    },
+    onSessionUpdated: () => {
+      console.log(`[Voice WS] Voice Live session updated for ${session.id}`);
+    },
+    onSpeechStarted: () => {
+      // Barge-in: cancel TTS if speaking
+      if (session.isSpeaking) {
+        cancelCurrentSpeech(session);
+        if (session.vlClient) {
+          session.vlClient.cancelResponse();
+          session.vlAudioAccumulator = [];
+        }
+      }
+      send(session.ws, { type: 'state', data: { listening: true } });
+    },
+    onSpeechStopped: () => {
+      send(session.ws, { type: 'state', data: { listening: false } });
+    },
+    onTranscriptionCompleted: async (text: string) => {
+      if (!text.trim()) return;
+      console.log(`[Voice WS] VL transcription for ${session.id}: "${text}"`);
+      send(session.ws, { type: 'interim', text });
+      await processSpeechResult(session, text.trim());
+    },
+    onAudioDelta: (base64Audio: string) => {
+      session.vlAudioAccumulator.push(Buffer.from(base64Audio, 'base64'));
+    },
+    onAudioDone: () => {
+      if (session.vlAudioAccumulator.length > 0) {
+        const pcm = Buffer.concat(session.vlAudioAccumulator);
+        session.vlAudioAccumulator = [];
+        const wav = pcmToWav(pcm, 24000, 16, 1);
+        send(session.ws, {
+          type: 'audio',
+          audioBase64: wav.toString('base64'),
+        });
+      }
+    },
+    onAudioTranscriptDelta: () => {
+      // Debug: what Voice Live TTS is saying
+    },
+    onResponseDone: () => {
+      session.isSpeaking = false;
+      send(session.ws, { type: 'state', data: { speaking: false } });
+      if (session.vlResponseResolve) {
+        session.vlResponseResolve();
+        session.vlResponseResolve = null;
+      }
+    },
+    onError: (error: Error) => {
+      console.error(`[Voice WS] Voice Live error for ${session.id}:`, error);
+      send(session.ws, { type: 'error', text: `Voice Live: ${error.message}` });
+    },
+    onClose: () => {
+      console.log(`[Voice WS] Voice Live connection closed for ${session.id}`);
+    },
+  };
+}
+
 export function isVoiceWebSocketReady(): boolean {
+  if (env.voiceBackend === 'voice_live') {
+    return isVoiceLiveConfigured();
+  }
   return isAzureSttConfigured();
 }

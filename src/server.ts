@@ -16,6 +16,7 @@ import { detectWindowFrame } from './ocr/windowFrameDetector.js';
 import { detectWindowFrameWithVision, isAzureVisionConfigured } from './ocr/azureVisionOcr.js';
 import { setupVoiceWebSocket, isVoiceWebSocketReady, shutdownVoiceWebSocket, getSessionStats } from './realtime/voiceWebSocket.js';
 import { isAzureSttConfigured } from './stt/azureSpeechStt.js';
+import { setupVoiceLiveTestWebSocket, shutdownVoiceLiveTestWebSocket, isVoiceLiveConfigured } from './realtime/voiceLiveWebSocket.js';
 
 export async function startServer() {
   const app = express();
@@ -42,6 +43,8 @@ export async function startServer() {
       stt: isAzureSttConfigured() ? 'azure-speech-sdk' : 'browser-webspeech',
       ocr: isAzureVisionConfigured() ? 'azure-openai-vision + edge-detection' : 'edge-detection-only',
       voiceWebSocket: isVoiceWebSocketReady() ? 'ready' : 'fallback-http',
+      voiceLive: isVoiceLiveConfigured() ? 'configured' : 'not-configured',
+      voiceBackend: env.voiceBackend,
       sessions: sessionStats,
     });
   });
@@ -296,10 +299,27 @@ export async function startServer() {
 
   const port = Number(process.env.PORT || 4000);
   const httpServer = createServer(app);
-  setupVoiceWebSocket(httpServer);
+  const voiceWss = setupVoiceWebSocket(httpServer);
+  const voiceLiveWss = setupVoiceLiveTestWebSocket(httpServer);
+
+  // Manual upgrade routing: both WSS use noServer mode so we dispatch by path
+  httpServer.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+    if (pathname === '/ws/voice') {
+      voiceWss.handleUpgrade(request, socket, head, (ws) => {
+        voiceWss.emit('connection', ws, request);
+      });
+    } else if (pathname === '/ws/voice-live-test') {
+      voiceLiveWss.handleUpgrade(request, socket, head, (ws) => {
+        voiceLiveWss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
 
   await new Promise<void>((resolve) => {
-    httpServer.listen(port, () => {
+    httpServer.listen(port, '0.0.0.0', () => {
       console.log(`🚗 Servicio IA recepcionista escuchando en puerto ${port}`);
       console.log(`📞 WebSocket de voz disponible en ws://localhost:${port}/ws/voice`);
       if (isAzureSttConfigured()) {
@@ -307,6 +327,12 @@ export async function startServer() {
       } else {
         console.log('⚠️ Azure Speech no configurado - usando fallback del navegador para STT');
       }
+      if (isVoiceLiveConfigured()) {
+        console.log(`✅ Voice Live API configurada (test: ws://localhost:${port}/ws/voice-live-test)`);
+      } else {
+        console.log(`⚠️ Voice Live no configurado (VOICE_LIVE_*); /ws/voice-live-test acepta conexión pero fallará en init`);
+      }
+      console.log(`📋 Voice backend: ${env.voiceBackend}`);
       resolve();
     });
   });
@@ -314,6 +340,7 @@ export async function startServer() {
   const shutdown = async (signal: string) => {
     console.log(`\n[Server] ${signal} received — graceful shutdown...`);
     await shutdownVoiceWebSocket();
+    shutdownVoiceLiveTestWebSocket();
     httpServer.close(() => {
       console.log('[Server] HTTP server closed');
       process.exit(0);

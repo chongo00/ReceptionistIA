@@ -25,6 +25,12 @@ export interface EnvConfig {
   voiceSimulatorEnabled: boolean;
   maxConcurrentSessions: number;
   maxConcurrentTts: number;
+  // Voice Live API
+  voiceLiveEndpoint: string | null;
+  voiceLiveApiKey: string | null;
+  voiceLiveModel: string | null;
+  voiceLiveApiVersion: string;
+  voiceBackend: 'local' | 'voice_live';
 }
 
 let _cached: EnvConfig | null = null;
@@ -64,7 +70,17 @@ export function loadEnv(): EnvConfig {
     voiceSimulatorEnabled: process.env.VOICE_SIMULATOR_ENABLED !== 'false',
     maxConcurrentSessions: Number(process.env.MAX_CONCURRENT_SESSIONS || 20),
     maxConcurrentTts: Number(process.env.MAX_CONCURRENT_TTS || 25),
+    voiceLiveEndpoint: process.env.VOICE_LIVE_ENDPOINT || null,
+    voiceLiveApiKey: process.env.VOICE_LIVE_API_KEY || null,
+    voiceLiveModel: process.env.VOICE_LIVE_MODEL || null,
+    voiceLiveApiVersion: process.env.VOICE_LIVE_API_VERSION || '2025-10-01',
+    voiceBackend: (process.env.VOICE_BACKEND === 'voice_live' ? 'voice_live' : 'local') as 'local' | 'voice_live',
   };
 
   return _cached;
+}
+
+export function isVoiceLiveConfigured(): boolean {
+  const env = loadEnv();
+  return Boolean(env.voiceLiveEndpoint && env.voiceLiveApiKey && env.voiceLiveModel);
 }

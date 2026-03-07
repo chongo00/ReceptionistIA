@@ -22,6 +22,11 @@ services:
       - AZURE_TTS_VOICE_ES=${AZURE_TTS_VOICE_ES:-es-MX-DaliaNeural}
       - AZURE_TTS_VOICE_EN=${AZURE_TTS_VOICE_EN:-en-US-JennyNeural}
       - VOICE_SIMULATOR_ENABLED=${VOICE_SIMULATOR_ENABLED:-true}
+      - VOICE_LIVE_ENDPOINT=${VOICE_LIVE_ENDPOINT:-}
+      - VOICE_LIVE_API_KEY=${VOICE_LIVE_API_KEY:-}
+      - VOICE_LIVE_MODEL=${VOICE_LIVE_MODEL:-}
+      - VOICE_LIVE_API_VERSION=${VOICE_LIVE_API_VERSION:-2025-10-01}
+      - VOICE_BACKEND=${VOICE_BACKEND:-local}
     volumes:
       - ./public:/app/public:ro
     deploy:
