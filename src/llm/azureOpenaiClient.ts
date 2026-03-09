@@ -46,6 +46,68 @@ interface AzureOpenAIChatResponse {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
+/**
+ * Streaming variant — yields token deltas as they arrive from Azure OpenAI.
+ * The caller reassembles text and decides when to flush sentences.
+ */
+export async function* streamChatWithAzureOpenAI(
+  messages: ChatMessage[],
+  options?: { maxTokens?: number },
+): AsyncGenerator<{ delta: string; done: boolean }> {
+  const cfg = getConfig();
+
+  const openaiMessages = messages.map((m) => {
+    const msg: Record<string, unknown> = { role: m.role, content: m.content };
+    if (m.tool_calls?.length) msg.tool_calls = m.tool_calls;
+    if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+    return msg;
+  });
+
+  const body: Record<string, unknown> = {
+    messages: openaiMessages,
+    max_tokens: options?.maxTokens ?? 120,
+    temperature: 0.4,
+    stream: true,
+  };
+
+  const response = await axios.post(cfg.url, body, {
+    headers: { 'api-key': cfg.apiKey, 'Content-Type': 'application/json' },
+    timeout: LLM_TIMEOUT,
+    responseType: 'stream',
+  });
+
+  const stream = response.data as import('stream').Readable;
+  let buffer = '';
+
+  for await (const chunk of stream) {
+    buffer += chunk.toString();
+    const lines = buffer.split('\n');
+    // Keep incomplete last line in buffer
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === '[DONE]') {
+        yield { delta: '', done: true };
+        return;
+      }
+      try {
+        const parsed = JSON.parse(payload);
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) {
+          yield { delta, done: false };
+        }
+      } catch {
+        // Skip malformed SSE lines
+      }
+    }
+  }
+  // Stream ended without [DONE]
+  yield { delta: '', done: true };
+}
+
 export async function chatWithAzureOpenAI(
   messages: ChatMessage[],
   tools?: ToolDefinition[],

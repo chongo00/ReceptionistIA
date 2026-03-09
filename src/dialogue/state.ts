@@ -1,4 +1,5 @@
 import type { AppointmentType, AppointmentStatus } from '../models/appointments.js';
+import { loadEnv } from '../config/env.js';
 
 export type ConversationStep =
   | 'askLanguage'
@@ -64,13 +65,16 @@ export interface ConversationState {
   askedAboutTime: boolean;
   lastQuestion: string | null;
   silenceCount: number;
+  /** Whether the language has been auto-detected from user speech */
+  languageDetected: boolean;
 }
 
 export function createInitialState(callId: string): ConversationState {
+  const env = loadEnv();
   return {
     callId,
-    language: 'es',
-    step: 'askLanguage',
+    language: env.defaultLanguage,
+    step: 'identifyByCallerId',
     callerPhone: null,
     customerMatches: [],
     customerConfirmedName: null,
@@ -91,5 +95,6 @@ export function createInitialState(callId: string): ConversationState {
     askedAboutTime: false,
     lastQuestion: null,
     silenceCount: 0,
+    languageDetected: false,
   };
 }

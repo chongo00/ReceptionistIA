@@ -90,7 +90,7 @@ function buildSystemPrompt(language: 'es' | 'en', callerPhone: string | null): s
   if (language === 'en') {
     return `You are a virtual receptionist for a blinds and shutters company.
 Your ONLY task right now is to identify the calling customer.
-You could NOT find them by their phone number (${callerPhone || 'unknown'}) or by their name.
+You could NOT find them by their phone number on file or by their name.
 
 Available tools:
 - searchCustomers: Search customers by name, phone or email
@@ -111,7 +111,7 @@ Rules:
 
   return `Eres la recepcionista virtual de una empresa de cortinas y persianas.
 Tu ÚNICA tarea en este momento es identificar al cliente que está llamando.
-NO pudiste encontrarlo por su número de teléfono (${callerPhone || 'desconocido'}) ni por su nombre.
+NO pudiste encontrarlo por su número de teléfono registrado ni por su nombre.
 
 Herramientas disponibles:
 - searchCustomers: Buscar clientes por nombre, teléfono o email

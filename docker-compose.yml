@@ -27,10 +27,13 @@ services:
       - VOICE_LIVE_MODEL=${VOICE_LIVE_MODEL:-}
       - VOICE_LIVE_API_VERSION=${VOICE_LIVE_API_VERSION:-2025-10-01}
       - VOICE_BACKEND=${VOICE_BACKEND:-local}
+      - LIVEKIT_WS_URL=${LIVEKIT_WS_URL:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
     volumes:
       - ./public:/app/public:ro
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 768M
     restart: unless-stopped

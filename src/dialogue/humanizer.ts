@@ -125,6 +125,96 @@ export function naturalTransition(lang: 'es' | 'en'): string {
   return pick(lang === 'es' ? esOptions : enOptions);
 }
 
+// ── Backchanneling phrases ──────────────────────────────────────────
+export const BACKCHANNEL_ES = [
+  'Ajá',
+  'Mm-hmm',
+  'Entiendo',
+  'Claro',
+  'Sí, sí',
+  'Ok',
+  'Mhm',
+] as const;
+
+export const BACKCHANNEL_EN = [
+  'Uh-huh',
+  'Mm-hmm',
+  'I see',
+  'Right',
+  'Okay',
+  'Got it',
+  'Mhm',
+] as const;
+
+// ── Reminder phrases (contextual nudges after silence) ──────────────
+export const REMINDER_ES: Record<string, readonly string[]> = {
+  askType: [
+    '¿Sigues ahí? ¿Qué tipo de cita necesitas?',
+    '¿Estás ahí? Puedo ayudarte con cotización, instalación o reparación.',
+  ],
+  askDate: [
+    '¿Sigues ahí? ¿Para qué fecha quieres la cita?',
+    'Cuando estés listo, dime qué fecha te conviene.',
+  ],
+  askTime: [
+    '¿Sigues ahí? ¿A qué hora te gustaría?',
+    'Tómate tu tiempo, dime la hora cuando estés listo.',
+  ],
+  askDuration: [
+    '¿Todo bien? Lo estándar es una hora, ¿te parece bien?',
+    '¿Sigues ahí? ¿Te parece bien una hora de duración?',
+  ],
+  confirmSummary: [
+    '¿Entonces confirmamos la cita? Dime sí o no.',
+    '¿Sigues ahí? Solo necesito que me confirmes.',
+  ],
+  askCustomerName: [
+    '¿Sigues ahí? Necesito tu nombre para continuar.',
+    'Cuando puedas, dime tu nombre completo.',
+  ],
+  default: [
+    '¿Sigues ahí? Estoy aquí cuando estés listo.',
+    '¿Todo bien? Tómate tu tiempo.',
+  ],
+};
+
+export const REMINDER_EN: Record<string, readonly string[]> = {
+  askType: [
+    'Still there? What type of appointment do you need?',
+    'Just checking — would you like a quote, installation, or repair?',
+  ],
+  askDate: [
+    'Still there? What date works for you?',
+    'Take your time — just let me know the date when you\'re ready.',
+  ],
+  askTime: [
+    'Still there? What time would you like?',
+    'No rush — just tell me the time when you\'re ready.',
+  ],
+  askDuration: [
+    'Everything okay? Standard is one hour — does that work?',
+    'Still there? One hour is the default — is that good?',
+  ],
+  confirmSummary: [
+    'So, shall we confirm? Just say yes or no.',
+    'Still there? I just need your confirmation.',
+  ],
+  askCustomerName: [
+    'Still there? I need your name to continue.',
+    'Whenever you\'re ready, just give me your full name.',
+  ],
+  default: [
+    'Still there? I\'m here whenever you\'re ready.',
+    'Everything okay? Take your time.',
+  ],
+};
+
+export function getReminder(step: string, lang: 'es' | 'en'): string {
+  const bank = lang === 'en' ? REMINDER_EN : REMINDER_ES;
+  const phrases = bank[step] || bank['default']!;
+  return pick(phrases);
+}
+
 export function enrichSsmlBody(text: string): string {
   let result = text;
 

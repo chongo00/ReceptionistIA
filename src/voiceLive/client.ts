@@ -4,8 +4,11 @@ import type {
   ClientEvent,
   ServerEvent,
   AudioDeltaEvent,
+  AudioDoneEvent,
   AudioTranscriptDeltaEvent,
   TranscriptionCompletedEvent,
+  ResponseCreatedEvent,
+  ResponseDoneEvent,
   VoiceLiveErrorEvent,
 } from './types.js';
 
@@ -15,15 +18,15 @@ export interface VoiceLiveCallbacks {
   onSpeechStarted: () => void;
   onSpeechStopped: () => void;
   onTranscriptionCompleted: (text: string) => void;
-  onAudioDelta: (base64Audio: string) => void;
-  onAudioDone: () => void;
+  onAudioDelta: (base64Audio: string, responseId: string) => void;
+  onAudioDone: (responseId: string) => void;
   onAudioTranscriptDelta: (text: string) => void;
-  onResponseDone: () => void;
+  onResponseDone: (responseId: string) => void;
   onError: (error: Error) => void;
   onClose: () => void;
 }
 
-const CONNECT_TIMEOUT_MS = 20_000;
+const CONNECT_TIMEOUT_MS = 10_000;
 
 export class VoiceLiveClient {
   private ws: WebSocket | null = null;
@@ -31,6 +34,7 @@ export class VoiceLiveClient {
   private _connected = false;
   private _sessionReady = false;
   private connectStartMs = 0;
+  private _currentResponseId: string | null = null;
 
   constructor(callbacks: VoiceLiveCallbacks) {
     this.callbacks = callbacks;
@@ -38,6 +42,7 @@ export class VoiceLiveClient {
 
   get connected(): boolean { return this._connected; }
   get sessionReady(): boolean { return this._sessionReady; }
+  get currentResponseId(): string | null { return this._currentResponseId; }
 
   /**
    * Open WebSocket to Voice Live API.
@@ -156,18 +161,38 @@ export class VoiceLiveClient {
   /**
    * Inject our response text and trigger Voice Live TTS.
    *
-   * Uses response.create with per-response instructions that instruct
-   * the LLM to repeat our exact text. This is the Mode A approach:
-   * we control the dialogue, Voice Live only does STT + TTS.
+   * Uses conversation.item.create to inject the exact text as an assistant
+   * message, then response.create with audio-only modality to synthesize it.
+   * This avoids the unreliable "repeat after me" hack where the LLM could
+   * paraphrase, add preambles, or truncate the text.
    */
   speakText(text: string): void {
+    // Step 1: Inject the exact text as an assistant message in the conversation
+    this.sendEvent({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+      },
+    });
+
+    // Step 2: Trigger TTS-only response to synthesize the injected text
     this.sendEvent({
       type: 'response.create',
       response: {
-        modalities: ['text', 'audio'],
-        instructions: `You MUST repeat the following text to the user exactly as written, word for word, without adding, removing, or changing anything. Use a natural, conversational tone:\n\n${text}`,
+        modalities: ['audio'],
       },
     });
+  }
+
+  /**
+   * Speak a single sentence via Voice Live TTS.
+   * Creates a conversation item + triggers response for just that sentence.
+   * Used by the streaming pipeline to send sentences as they arrive from LLM.
+   */
+  speakSentence(sentence: string): void {
+    this.speakText(sentence);
   }
 
   /** Cancel an in-progress response (barge-in). */
@@ -223,22 +248,36 @@ export class VoiceLiveClient {
         break;
       }
 
-      case 'response.audio.delta':
-        this.callbacks.onAudioDelta((event as AudioDeltaEvent).delta);
+      case 'response.created': {
+        const respId = (event as ResponseCreatedEvent).response?.id as string | undefined;
+        if (respId) this._currentResponseId = respId;
         break;
+      }
 
-      case 'response.audio.done':
-        this.callbacks.onAudioDone();
+      case 'response.audio.delta': {
+        const audioDelta = event as AudioDeltaEvent;
+        this.callbacks.onAudioDelta(audioDelta.delta, audioDelta.response_id);
         break;
+      }
+
+      case 'response.audio.done': {
+        const audioDone = event as AudioDoneEvent;
+        this.callbacks.onAudioDone(audioDone.response_id);
+        break;
+      }
 
       case 'response.audio_transcript.delta':
         this.callbacks.onAudioTranscriptDelta((event as AudioTranscriptDeltaEvent).delta);
         break;
 
-      case 'response.done':
-        console.log('[VoiceLive] Response complete');
-        this.callbacks.onResponseDone();
+      case 'response.done': {
+        const respDone = event as ResponseDoneEvent;
+        const respDoneId = (respDone.response as { id?: string })?.id || this._currentResponseId || '';
+        console.log(`[VoiceLive] Response complete (id=${respDoneId})`);
+        this._currentResponseId = null;
+        this.callbacks.onResponseDone(respDoneId);
         break;
+      }
 
       case 'error': {
         const errMsg = (event as VoiceLiveErrorEvent).error?.message || 'Unknown Voice Live error';

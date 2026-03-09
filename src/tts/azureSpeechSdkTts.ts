@@ -37,10 +37,14 @@ function resolveVoice(language: SpeechLang): VoiceProfile {
   return envVoice ? { ...base, name: envVoice } : base;
 }
 
-function createSpeechConfig(voice: VoiceProfile): sdk.SpeechConfig {
+function createSpeechConfig(voice: VoiceProfile, outputFormat?: 'mp3' | 'pcm16k'): sdk.SpeechConfig {
   const { key, region } = getCredentials();
   const cfg = sdk.SpeechConfig.fromSubscription(key, region);
-  cfg.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio24Khz48KBitRateMonoMp3;
+  if (outputFormat === 'pcm16k') {
+    cfg.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm;
+  } else {
+    cfg.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio24Khz48KBitRateMonoMp3;
+  }
   cfg.speechSynthesisVoiceName = voice.name;
   return cfg;
 }
@@ -107,19 +111,23 @@ function buildNaturalSsml(text: string, voice: VoiceProfile): string {
 
 const TTS_TIMEOUT_MS = 10_000;
 
+export type TtsOutputFormat = 'mp3' | 'pcm16k';
+
 export async function synthesizeSpeech(
   text: string,
-  language: SpeechLang = 'es'
+  language: SpeechLang = 'es',
+  outputFormat: TtsOutputFormat = 'mp3',
 ): Promise<{ bytes: Buffer; contentType: string }> {
   await acquireTtsSlot();
 
   const voice = resolveVoice(language);
-  const cfg = createSpeechConfig(voice);
+  const cfg = createSpeechConfig(voice, outputFormat);
   const synthesizer = new sdk.SpeechSynthesizer(cfg, undefined);
   const ssml = buildNaturalSsml(text, voice);
+  const contentType = outputFormat === 'pcm16k' ? 'audio/pcm' : 'audio/mpeg';
 
   const startMs = Date.now();
-  console.log(`[TTS] Starting synthesis (${language}, voice=${voice.name}, len=${text.length}, active=${_activeTts}/${MAX_CONCURRENT_TTS})`);
+  console.log(`[TTS] Starting synthesis (${language}, voice=${voice.name}, fmt=${outputFormat}, len=${text.length}, active=${_activeTts}/${MAX_CONCURRENT_TTS})`);
 
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let settled = false;
@@ -136,7 +144,7 @@ export async function synthesizeSpeech(
 
           if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
             console.log(`[TTS] Completed in ${Date.now() - startMs}ms (${result.audioData.byteLength} bytes)`);
-            resolve({ bytes: Buffer.from(result.audioData), contentType: 'audio/mpeg' });
+            resolve({ bytes: Buffer.from(result.audioData), contentType });
           } else if (result.reason === sdk.ResultReason.Canceled) {
             const cancellation = sdk.CancellationDetails.fromResult(result);
             reject(new Error(`TTS canceled: ${cancellation.errorDetails}`));

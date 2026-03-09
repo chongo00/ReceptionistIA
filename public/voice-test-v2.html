@@ -145,10 +145,20 @@
       <select id="voiceBackend" style="flex:1;background:#1a2440;border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:.9rem;">
         <option value="local">Local (Azure Speech SDK)</option>
         <option value="voice_live">Voice Live API</option>
+        <option value="livekit">LiveKit WebRTC</option>
       </select>
     </label>
   </div>
-  <p style="color:var(--mute);font-size:.75rem;margin-top:8px;">Puedes dejar el teléfono vacío para una prueba rápida.</p>
+  <div class="dialer-row" style="margin-top:8px;">
+    <label style="color:var(--mute);font-size:.85rem;display:flex;align-items:center;gap:8px;flex:1;">
+      Language:
+      <span style="flex:1;background:#1a2440;border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:.9rem;text-align:center;">
+        Auto-detect (starts in English)
+      </span>
+      <input type="hidden" id="callLanguage" value="">
+    </label>
+  </div>
+  <p style="color:var(--mute);font-size:.75rem;margin-top:8px;">You can leave the phone field empty for a quick test.</p>
   <p id="wsHostHint" style="color:var(--mute);font-size:.7rem;margin-top:4px;display:none;"></p>
 </div>
 
@@ -157,16 +167,10 @@
   <div class="call-timer" id="callTimer">00:00</div>
   <div class="status-bar idle" id="statusBar">Conectando...</div>
 
-  <!-- Language Selector -->
-  <div class="lang-selector" id="langSelector">
-    <div style="color:var(--text);font-size:.95rem;margin-bottom:16px;">Selecciona el idioma:</div>
-    <div class="lang-buttons">
-      <button class="btn-lang" id="btnLang1" onclick="selectLanguage('es')" disabled>
-        <span class="flag">🇪🇸</span> Español
-      </button>
-      <button class="btn-lang" id="btnLang2" onclick="selectLanguage('en')" disabled>
-        <span class="flag">🇺🇸</span> English
-      </button>
+  <!-- Language Detected Badge -->
+  <div class="lang-selector" id="langSelector" style="text-align:center;">
+    <div id="langBadge" style="display:inline-block;background:#1a2440;border:1px solid var(--border);color:var(--mute);padding:6px 16px;border-radius:20px;font-size:.8rem;">
+      Language: detecting...
     </div>
   </div>
 
@@ -256,12 +260,25 @@ var audioContext = null;
 var isRecording = false;
 var currentAudio = null;
 
+// LiveKit WebRTC state
+var lkRoom = null; // LiveKit Room instance
+var lkCallId = null; // Call ID for the LiveKit session
+var isLiveKitMode = false;
+
 // Persistent AudioContext for playback (survives across calls)
 var playbackCtx = null;
+var playbackWorklet = null;   // AudioWorklet node for gapless PCM playback
+var useWorkletPlayback = false; // Feature flag set after successful worklet init
 
-// Audio queue for sequential playback
+// Audio queue for sequential playback (legacy fallback)
 var audioQueue = [];
 var isPlayingAudio = false;
+
+// Buffer for audio chunks that arrive before playback worklet is ready
+var earlyAudioBuffer = [];
+
+// Response ID tracking — filter stale audio from interrupted responses
+var currentResponseId = null;
 
 // Init que está pendiente de enviarse (para evitar carreras con ws.onopen)
 var pendingInitData = null;
@@ -316,15 +333,32 @@ function handleServerMessage(msg) {
         setMicState(msg.data.listening ? 'listening' : 'paused');
       }
       if (msg.data?.speaking !== undefined) {
-        setMicState(msg.data.speaking ? 'speaking' : 'paused');
+        if (msg.data.speaking) {
+          setMicState('speaking');
+        } else {
+          // Speaking stopped (possibly barge-in) — flush any remaining audio
+          flushPlayback();
+          setMicState('paused');
+        }
       }
+      if (msg.data?.languageDetected) {
+        updateLanguageBadge(msg.data.languageDetected);
+      }
+      break;
+
+    case 'clear':
+      // Instant audio flush for barge-in interruptions
+      currentResponseId = null;
+      flushPlayback();
       break;
       
     case 'greeting':
       addMessage('ia', msg.text);
-      document.getElementById('btnLang1').disabled = false;
-      document.getElementById('btnLang2').disabled = false;
-      setStatusBar('idle', 'Selecciona el idioma');
+      // Show active call area and language badge
+      document.getElementById('callActiveArea').className = 'call-active-area visible';
+      setStatusBar('speaking', '🗣️ Sara is speaking...');
+      // Start recording immediately
+      startRecording();
       break;
       
     case 'interim':
@@ -338,7 +372,15 @@ function handleServerMessage(msg) {
       break;
       
     case 'audio':
-      playAudio(msg.audioBase64);
+      // Filter stale audio from interrupted responses
+      if (msg.data?.responseId) {
+        if (currentResponseId && msg.data.responseId !== currentResponseId) {
+          // Stale audio from a previous response — discard
+          break;
+        }
+        currentResponseId = msg.data.responseId;
+      }
+      playAudio(msg.audioBase64, msg.data);
       if (msg.text) {
         // Audio comes with text - already added in 'final'
       }
@@ -368,37 +410,208 @@ function setConnectionStatus(status, text) {
 // ═══ CALL MANAGEMENT ═══
 async function startCall() {
   var phone = document.getElementById('customerPhone').value.trim();
-  
+  var backend = document.getElementById('voiceBackend').value;
+
   document.getElementById('btnCall').disabled = true;
   document.getElementById('btnCall').textContent = '⏳ Conectando...';
-
-  // Guardar datos de init por si el socket aún no está abierto
-  pendingInitData = {
-    callerId: phone || null,
-    companyPhone: null,
-  };
-
-  // Conectar (si no lo está) y dejar que onopen envíe el init
-  connect();
-
-  // Si ya está abierto (por ejemplo, reconexión), intentar enviar de inmediato
-  sendPendingInit();
 
   callActive = true;
   callStartTime = Date.now();
   callTimerInterval = setInterval(updateCallTimer, 1000);
   document.getElementById('callTimer').className = 'call-timer active';
-  
+
   // Show call screen
   document.getElementById('callScreen').className = 'panel call-screen active';
   document.getElementById('dialerPanel').style.display = 'none';
   document.getElementById('transcript').innerHTML = '';
   document.getElementById('finishedOverlay').className = 'finished-overlay';
-  
+
   setStatusBar('processing', '📡 Conectando con IA...');
   addMessage('system', '📞 Llamada iniciada');
-  
-  // El mensaje init se envía desde sendPendingInit() cuando el WebSocket esté listo
+
+  if (backend === 'livekit') {
+    isLiveKitMode = true;
+    await startCallLiveKit(phone);
+  } else {
+    isLiveKitMode = false;
+    await startCallWebSocket(phone);
+  }
+}
+
+async function startCallWebSocket(phone) {
+  var selectedLang = document.getElementById('callLanguage').value;
+  pendingInitData = {
+    callerId: phone || null,
+    companyPhone: null,
+    language: selectedLang || undefined,  // empty = auto-detect (server uses DEFAULT_LANGUAGE)
+  };
+
+  // Pre-initialize playback worklet eagerly so TTS audio can play as soon as it arrives
+  // (don't wait until greeting/startRecording — audio chunks would be dropped)
+  if (!playbackWorklet && typeof AudioWorkletNode !== 'undefined') {
+    initPlaybackWorklet().catch(function(e) {
+      log('⚠️ Early playback init failed (will retry on recording start): ' + e.message, 'warn');
+    });
+  }
+
+  connect();
+  sendPendingInit();
+}
+
+// ═══ LIVEKIT WEBRTC CALL ═══
+async function startCallLiveKit(phone) {
+  log('🔗 Iniciando sesión LiveKit WebRTC...', 'warn');
+
+  try {
+    // 1. Request token + bot session from server
+    var selectedLang = document.getElementById('callLanguage').value;
+    var roomName = 'voice-' + Date.now();
+    var identity = 'user-' + Date.now();
+
+    var resp = await fetch(API_BASE + '/livekit/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        roomName: roomName,
+        identity: identity,
+        callId: roomName,
+      }),
+    });
+
+    if (!resp.ok) {
+      var errBody = await resp.text();
+      throw new Error('Token request failed: ' + resp.status + ' ' + errBody);
+    }
+
+    var data = await resp.json();
+    lkCallId = data.callId;
+    log('✅ Token obtenido, room: ' + data.roomName, 'ok');
+
+    // 2. Load LiveKit client SDK dynamically (from CDN)
+    if (!window.LivekitClient) {
+      log('📦 Cargando LiveKit Client SDK...', 'warn');
+      await loadScript('https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js');
+      log('✅ LiveKit Client SDK cargado', 'ok');
+    }
+
+    var LK = window.LivekitClient;
+
+    // 3. Create room and connect
+    lkRoom = new LK.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+
+    // Handle bot audio tracks
+    lkRoom.on(LK.RoomEvent.TrackSubscribed, function(track, publication, participant) {
+      if (track.kind === 'audio' && participant.identity.startsWith('bot-')) {
+        log('🔊 Bot audio track subscribed', 'ok');
+        var audioEl = track.attach();
+        audioEl.id = 'lk-bot-audio';
+        audioEl.style.display = 'none';
+        document.body.appendChild(audioEl);
+        setMicState('speaking');
+      }
+    });
+
+    lkRoom.on(LK.RoomEvent.TrackUnsubscribed, function(track) {
+      var elements = track.detach();
+      elements.forEach(function(el) { el.remove(); });
+    });
+
+    // Handle data messages from bot
+    lkRoom.on(LK.RoomEvent.DataReceived, function(payload, participant, kind, topic) {
+      if (topic === 'bot-state' && participant && participant.identity.startsWith('bot-')) {
+        try {
+          var msg = JSON.parse(new TextDecoder().decode(payload));
+          handleLiveKitBotMessage(msg);
+        } catch(e) {
+          log('❌ Error parsing bot data: ' + e.message, 'err');
+        }
+      }
+    });
+
+    lkRoom.on(LK.RoomEvent.Disconnected, function(reason) {
+      log('🔌 LiveKit disconnected: ' + reason, 'warn');
+      if (callActive) hangUp();
+    });
+
+    // 4. Connect to the room
+    log('🔗 Connecting to LiveKit room...', 'warn');
+    await lkRoom.connect(data.wsUrl, data.token);
+    log('✅ Connected to LiveKit room!', 'ok');
+    setConnectionStatus('connected', 'LiveKit WebRTC');
+
+    // 5. Publish local microphone
+    await lkRoom.localParticipant.setMicrophoneEnabled(true);
+    log('🎤 Microphone published', 'ok');
+
+    // Show call active area (language badge stays visible)
+    document.getElementById('callActiveArea').className = 'call-active-area visible';
+    setMicState('listening');
+    isRecording = true; // Mark as recording so UI state works
+
+  } catch(err) {
+    log('❌ LiveKit error: ' + err.message, 'err');
+    addMessage('system', '⚠️ Error de conexión LiveKit: ' + err.message);
+    document.getElementById('btnCall').disabled = false;
+    document.getElementById('btnCall').textContent = '📞 Llamar';
+    callActive = false;
+  }
+}
+
+function handleLiveKitBotMessage(msg) {
+  log('📨 LK bot: ' + msg.type);
+  switch(msg.type) {
+    case 'state-update':
+      if (msg.replyText) {
+        addMessage('ia', msg.replyText);
+      }
+      if (msg.state) {
+        updateStateDisplay(msg.state);
+      }
+      if (msg.isFinished) {
+        showFinished(msg.state);
+      }
+      break;
+    case 'session-end':
+      addMessage('system', 'Session ended');
+      break;
+    case 'language-detected':
+      if (msg.language) {
+        updateLanguageBadge(msg.language);
+      }
+      break;
+  }
+}
+
+// Send text message in LiveKit mode via data channel
+function sendTextMsgLiveKit() {
+  var input = document.getElementById('txtMsg');
+  var text = input.value.trim();
+  if (!text || !lkRoom) return;
+
+  input.value = '';
+  addMessage('user', text);
+  setMicState('processing');
+
+  var encoder = new TextEncoder();
+  lkRoom.localParticipant.publishData(encoder.encode(text), {
+    reliable: true,
+    topic: 'user-text',
+  });
+}
+
+function loadScript(url) {
+  return new Promise(function(resolve, reject) {
+    var existing = document.querySelector('script[src="' + url + '"]');
+    if (existing) { resolve(); return; }
+    var script = document.createElement('script');
+    script.src = url;
+    script.onload = resolve;
+    script.onerror = function() { reject(new Error('Failed to load: ' + url)); };
+    document.head.appendChild(script);
+  });
 }
 
 function waitForConnection() {
@@ -436,28 +649,25 @@ function sendPendingInit() {
 }
 
 function selectLanguage(lang) {
+  // Legacy: now handled by auto-detection. Just update badge.
+  updateLanguageBadge(lang);
+}
+
+function updateLanguageBadge(lang) {
   chosenLanguage = lang;
-  document.getElementById('btnLang1').disabled = true;
-  document.getElementById('btnLang2').disabled = true;
-  
-  addMessage('user', lang === 'es' ? 'Español' : 'English');
-  setStatusBar('processing', '⏳ Configurando idioma...');
-  
-  // Send language selection
-  ws.send(JSON.stringify({
-    type: 'language',
-    data: { language: lang }
-  }));
-  
-  // Show active call area
-  document.getElementById('langSelector').style.display = 'none';
-  document.getElementById('callActiveArea').className = 'call-active-area visible';
-  
-  // Start recording
-  startRecording();
+  var badge = document.getElementById('langBadge');
+  if (badge) {
+    badge.style.color = 'var(--text)';
+    badge.style.borderColor = lang === 'es' ? '#e67e22' : '#3498db';
+    badge.textContent = lang === 'es' ? 'Language: Espanol' : 'Language: English';
+  }
 }
 
 function sendTextMsg() {
+  if (isLiveKitMode) {
+    sendTextMsgLiveKit();
+    return;
+  }
   var input = document.getElementById('txtMsg');
   var text = input.value.trim();
   if (!text || !ws) return;
@@ -479,7 +689,22 @@ function hangUp() {
   clearInterval(callTimerInterval);
   document.getElementById('callTimer').className = 'call-timer';
 
-  if (ws) {
+  if (isLiveKitMode && lkRoom) {
+    lkRoom.disconnect();
+    lkRoom = null;
+    // Notify server to close bot session
+    if (lkCallId) {
+      fetch(API_BASE + '/livekit/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: lkCallId }),
+      }).catch(function() {});
+      lkCallId = null;
+    }
+    // Remove any attached audio elements
+    var botAudio = document.getElementById('lk-bot-audio');
+    if (botAudio) botAudio.remove();
+  } else if (ws) {
     ws.send(JSON.stringify({ type: 'hangup' }));
   }
 
@@ -493,9 +718,26 @@ function newCall() {
   callActive = false;
   chosenLanguage = null;
   sessionId = null;
+  isLiveKitMode = false;
   stopRecording();
   stopPlayback();
   clearInterval(callTimerInterval);
+
+  // Close LiveKit room if active
+  if (lkRoom) {
+    lkRoom.disconnect().catch(function() {});
+    lkRoom = null;
+    if (lkCallId) {
+      fetch(API_BASE + '/livekit/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: lkCallId }),
+      }).catch(function() {});
+      lkCallId = null;
+    }
+    var botAudio = document.getElementById('lk-bot-audio');
+    if (botAudio) botAudio.remove();
+  }
 
   // Close the existing WebSocket so the server cleans up the old session
   if (ws) {
@@ -509,6 +751,9 @@ function newCall() {
   document.getElementById('btnCall').disabled = false;
   document.getElementById('btnCall').textContent = '📞 Llamar';
   document.getElementById('langSelector').style.display = 'block';
+  // Reset language badge
+  var badge = document.getElementById('langBadge');
+  if (badge) { badge.textContent = 'Language: detecting...'; badge.style.color = 'var(--mute)'; badge.style.borderColor = 'var(--border)'; }
   document.getElementById('callActiveArea').className = 'call-active-area';
   document.getElementById('callTimer').textContent = '00:00';
   document.getElementById('customerPhone').value = '';
@@ -544,13 +789,16 @@ function showFinished(state) {
 }
 
 // ═══ AUDIO RECORDING (Browser → Server) ═══
+var captureWorklet = null; // AudioWorklet node for low-latency capture
+var useCaptureWorklet = false;
+
 async function startRecording() {
   if (isRecording) return;
-  
+
   try {
     log('🎤 Solicitando acceso al micrófono...', 'warn');
-    
-    mediaStream = await navigator.mediaDevices.getUserMedia({ 
+
+    mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -559,44 +807,85 @@ async function startRecording() {
         channelCount: 1,
       }
     });
-    
+
     log('✅ Micrófono accesible', 'ok');
-    
-    // Create audio context for processing
-    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    var source = audioContext.createMediaStreamSource(mediaStream);
-    
-    // Create script processor to get raw PCM data
-    var processor = audioContext.createScriptProcessor(4096, 1, 1);
-    
-    processor.onaudioprocess = function(e) {
-      if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
-      
-      // Get audio data as Float32Array
-      var inputData = e.inputBuffer.getChannelData(0);
-      
-      // Convert to 16-bit PCM
-      var pcmData = new Int16Array(inputData.length);
-      for (var i = 0; i < inputData.length; i++) {
-        var s = Math.max(-1, Math.min(1, inputData[i]));
-        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+
+    // Initialize playback worklet (once) on first user gesture
+    if (!playbackWorklet && typeof AudioWorkletNode !== 'undefined') {
+      await initPlaybackWorklet();
+    }
+
+    // Try AudioWorklet capture, fall back to ScriptProcessorNode
+    if (typeof AudioWorkletNode !== 'undefined') {
+      try {
+        await startRecordingWorklet();
+        return;
+      } catch(wErr) {
+        log('⚠️ AudioWorklet capture failed, using legacy: ' + wErr.message, 'warn');
       }
-      
-      // Send binary audio data to server
-      ws.send(pcmData.buffer);
-    };
-    
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-    
-    isRecording = true;
-    setMicState('listening');
-    log('✅ Grabación iniciada', 'ok');
-    
+    }
+
+    startRecordingLegacy();
   } catch(err) {
     log('❌ Error de micrófono: ' + err.message, 'err');
     addMessage('system', '⚠️ No se pudo acceder al micrófono. Usa el modo texto.');
   }
+}
+
+async function startRecordingWorklet() {
+  audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  await audioContext.audioWorklet.addModule('/audio-worklet-processor.js');
+
+  var source = audioContext.createMediaStreamSource(mediaStream);
+  captureWorklet = new AudioWorkletNode(audioContext, 'pcm-capture');
+
+  captureWorklet.port.onmessage = function(e) {
+    if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(e.data.pcm); // binary PCM frame
+  };
+
+  source.connect(captureWorklet);
+  // AudioWorklet requires connection to destination to run (even silently)
+  captureWorklet.connect(audioContext.destination);
+
+  isRecording = true;
+  useCaptureWorklet = true;
+  setMicState('listening');
+  log('✅ Grabación iniciada (AudioWorklet, baja latencia)', 'ok');
+}
+
+function startRecordingLegacy() {
+  // Legacy path using deprecated ScriptProcessorNode
+  audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  var source = audioContext.createMediaStreamSource(mediaStream);
+
+  // Create script processor to get raw PCM data
+  var processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  processor.onaudioprocess = function(e) {
+    if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    // Get audio data as Float32Array
+    var inputData = e.inputBuffer.getChannelData(0);
+
+    // Convert to 16-bit PCM
+    var pcmData = new Int16Array(inputData.length);
+    for (var i = 0; i < inputData.length; i++) {
+      var s = Math.max(-1, Math.min(1, inputData[i]));
+      pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+
+    // Send binary audio data to server
+    ws.send(pcmData.buffer);
+  };
+
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+
+  isRecording = true;
+  useCaptureWorklet = false;
+  setMicState('listening');
+  log('✅ Grabación iniciada (legacy)', 'ok');
 }
 
 function stopRecording() {
@@ -617,8 +906,7 @@ function stopRecording() {
 }
 
 // ═══ AUDIO PLAYBACK (Server → Browser) ═══
-// Uses Web Audio API for reliable playback — immune to autoplay restrictions
-// after a user gesture has resumed the AudioContext.
+// Dual-mode: AudioWorklet (gapless PCM) for modern browsers, legacy decode for fallback.
 
 function getPlaybackCtx() {
   if (!playbackCtx || playbackCtx.state === 'closed') {
@@ -630,12 +918,122 @@ function getPlaybackCtx() {
   return playbackCtx;
 }
 
-function playAudio(base64) {
-  if (!base64) return;
+async function initPlaybackWorklet() {
+  try {
+    if (typeof AudioWorkletNode === 'undefined') return; // Not supported
+    var ctx = getPlaybackCtx();
+    await ctx.audioWorklet.addModule('/audio-worklet-processor.js');
+    playbackWorklet = new AudioWorkletNode(ctx, 'pcm-player');
+    playbackWorklet.connect(ctx.destination);
+    playbackWorklet.port.onmessage = function(e) {
+      if (e.data.type === 'drained') {
+        // Playback buffer drained — switch to listening if call active
+        if (callActive && isRecording) {
+          setMicState('listening');
+        }
+      }
+    };
+    useWorkletPlayback = true;
+    log('✅ AudioWorklet playback initialized (gapless mode)', 'ok');
 
-  // Enqueue and kick the sequential player
-  audioQueue.push(base64);
+    // Flush any audio chunks that arrived before the worklet was ready
+    if (earlyAudioBuffer.length > 0) {
+      log('🔊 Flushing ' + earlyAudioBuffer.length + ' buffered audio chunks', 'ok');
+      var buffered = earlyAudioBuffer.slice();
+      earlyAudioBuffer = [];
+      for (var i = 0; i < buffered.length; i++) {
+        playAudio(buffered[i].base64, buffered[i].metadata);
+      }
+    }
+  } catch(err) {
+    log('⚠️ AudioWorklet not available, using legacy playback: ' + err.message, 'warn');
+    useWorkletPlayback = false;
+
+    // Flush early buffer via legacy path
+    if (earlyAudioBuffer.length > 0) {
+      var buffered = earlyAudioBuffer.slice();
+      earlyAudioBuffer = [];
+      for (var i = 0; i < buffered.length; i++) {
+        playAudioLegacy(buffered[i].base64);
+      }
+    }
+  }
+}
+
+function playAudio(base64, metadata) {
+  if (!base64) return;
   setMicState('speaking');
+
+  // If worklet playback is expected but not yet initialized, buffer the audio
+  if (!useWorkletPlayback && typeof AudioWorkletNode !== 'undefined' && !playbackWorklet) {
+    earlyAudioBuffer.push({ base64: base64, metadata: metadata });
+    log('⏳ Audio buffered (worklet initializing): ' + earlyAudioBuffer.length + ' chunks');
+    return;
+  }
+
+  // Route to AudioWorklet for raw PCM, legacy for WAV/MP3
+  if (useWorkletPlayback && playbackWorklet && metadata?.format === 'pcm') {
+    feedPcmToWorklet(base64);
+  } else if (useWorkletPlayback && playbackWorklet && !metadata?.format) {
+    // Try to detect and decode — could be WAV-wrapped PCM from Voice Live
+    feedEncodedToWorklet(base64);
+  } else {
+    // Legacy path: decode via Web Audio API
+    playAudioLegacy(base64);
+  }
+}
+
+function feedPcmToWorklet(base64) {
+  var binaryStr = atob(base64);
+  var len = binaryStr.length;
+  var bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+  // Convert raw bytes to Int16Array
+  var int16 = new Int16Array(bytes.buffer);
+  playbackWorklet.port.postMessage({ type: 'audio', samples: int16 }, [int16.buffer]);
+}
+
+function feedEncodedToWorklet(base64) {
+  // Decode base64, check if WAV header, extract PCM payload
+  var binaryStr = atob(base64);
+  var len = binaryStr.length;
+  var bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+  // Check for RIFF/WAV header (44 bytes)
+  var isWav = len > 44 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46; // "RIFF"
+
+  if (isWav) {
+    // Extract PCM data after 44-byte WAV header
+    var pcmBytes = bytes.slice(44);
+    var int16 = new Int16Array(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength / 2);
+    var copy = new Int16Array(int16);
+    playbackWorklet.port.postMessage({ type: 'audio', samples: copy }, [copy.buffer]);
+  } else {
+    // Not WAV — fall back to legacy decode (MP3 etc.)
+    playAudioLegacy(base64);
+  }
+}
+
+function flushPlayback() {
+  // Flush AudioWorklet buffer
+  if (playbackWorklet) {
+    playbackWorklet.port.postMessage({ type: 'clear' });
+  }
+  // Also flush legacy queue
+  audioQueue = [];
+  isPlayingAudio = false;
+  if (currentAudio) {
+    try { currentAudio.stop(); } catch(e) {}
+    currentAudio = null;
+  }
+}
+
+// Legacy playback path (WAV/MP3 chunks via decodeAudioData)
+function playAudioLegacy(base64) {
+  audioQueue.push(base64);
   if (!isPlayingAudio) {
     playNextChunk();
   }
@@ -678,12 +1076,7 @@ function playNextChunk() {
 }
 
 function stopPlayback() {
-  audioQueue = [];
-  isPlayingAudio = false;
-  if (currentAudio) {
-    try { currentAudio.stop(); } catch(e) {}
-    currentAudio = null;
-  }
+  flushPlayback();
 }
 
 // ═══ UI UPDATES ═══
@@ -793,6 +1186,9 @@ window.addEventListener('load', function() {
     if (this.value === 'voice_live') {
       badge.textContent = 'Voice Live API';
       badge.style.background = '#6366f1';
+    } else if (this.value === 'livekit') {
+      badge.textContent = 'LiveKit WebRTC';
+      badge.style.background = '#f59e0b';
     } else {
       badge.textContent = 'Local: Azure Speech SDK';
       badge.style.background = '';

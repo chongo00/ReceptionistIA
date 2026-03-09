@@ -31,6 +31,16 @@ export interface EnvConfig {
   voiceLiveModel: string | null;
   voiceLiveApiVersion: string;
   voiceBackend: 'local' | 'voice_live';
+  // Turn-taking & naturalness
+  turnResponsiveness: number;       // 0-1, default 0.7
+  interruptionSensitivity: number;  // 0-1, default 0.5
+  reminderTriggerMs: number;        // silence before nudge, default 8000
+  enableBackchanneling: boolean;    // "uh-huh" / "ajá", default true
+  defaultLanguage: 'es' | 'en';    // default language for new calls, default 'en'
+  // LiveKit (optional WebRTC transport)
+  livekitApiKey: string | null;
+  livekitApiSecret: string | null;
+  livekitWsUrl: string | null;
 }
 
 let _cached: EnvConfig | null = null;
@@ -75,6 +85,14 @@ export function loadEnv(): EnvConfig {
     voiceLiveModel: process.env.VOICE_LIVE_MODEL || null,
     voiceLiveApiVersion: process.env.VOICE_LIVE_API_VERSION || '2025-10-01',
     voiceBackend: (process.env.VOICE_BACKEND === 'voice_live' ? 'voice_live' : 'local') as 'local' | 'voice_live',
+    turnResponsiveness: Math.max(0, Math.min(1, Number(process.env.TURN_RESPONSIVENESS || 0.7))),
+    interruptionSensitivity: Math.max(0, Math.min(1, Number(process.env.INTERRUPTION_SENSITIVITY || 0.5))),
+    reminderTriggerMs: Number(process.env.REMINDER_TRIGGER_MS || 8000),
+    enableBackchanneling: process.env.ENABLE_BACKCHANNELING !== 'false',
+    defaultLanguage: (process.env.DEFAULT_LANGUAGE === 'es' ? 'es' : 'en') as 'es' | 'en',
+    livekitApiKey: process.env.LIVEKIT_API_KEY || null,
+    livekitApiSecret: process.env.LIVEKIT_API_SECRET || null,
+    livekitWsUrl: process.env.LIVEKIT_WS_URL || null,
   };
 
   return _cached;

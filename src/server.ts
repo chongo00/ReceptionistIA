@@ -17,6 +17,8 @@ import { detectWindowFrameWithVision, isAzureVisionConfigured } from './ocr/azur
 import { setupVoiceWebSocket, isVoiceWebSocketReady, shutdownVoiceWebSocket, getSessionStats } from './realtime/voiceWebSocket.js';
 import { isAzureSttConfigured } from './stt/azureSpeechStt.js';
 import { setupVoiceLiveTestWebSocket, shutdownVoiceLiveTestWebSocket, isVoiceLiveConfigured } from './realtime/voiceLiveWebSocket.js';
+import { isLiveKitConfigured, generateLiveKitToken, selectTransport } from './realtime/livekitTransport.js';
+import { createBotSession, closeBotSession, getActiveBotSessionCount } from './webrtc/botParticipant.js';
 
 export async function startServer() {
   const app = express();
@@ -45,8 +47,45 @@ export async function startServer() {
       voiceWebSocket: isVoiceWebSocketReady() ? 'ready' : 'fallback-http',
       voiceLive: isVoiceLiveConfigured() ? 'configured' : 'not-configured',
       voiceBackend: env.voiceBackend,
+      transport: selectTransport(),
+      livekitBotSessions: getActiveBotSessionCount(),
       sessions: sessionStats,
     });
+  });
+
+  // LiveKit token endpoint — used by browser clients to join a room
+  // Also spawns a bot participant that handles the dialogue in the same room.
+  app.post('/livekit/token', async (req, res) => {
+    if (!isLiveKitConfigured()) {
+      res.status(503).json({ error: 'LiveKit not configured' });
+      return;
+    }
+    const roomName = String(req.body?.roomName || `voice-${Date.now()}`);
+    const identity = String(req.body?.identity || `user-${Date.now()}`);
+    const callId = String(req.body?.callId || roomName);
+    try {
+      // Generate token for the browser user
+      const token = await generateLiveKitToken(roomName, identity);
+
+      // Spawn the server-side bot participant in the same room
+      await createBotSession(roomName, callId);
+
+      res.json({ token, wsUrl: env.livekitWsUrl, roomName, callId });
+    } catch (err) {
+      console.error('[LiveKit] Token generation / bot session error:', err);
+      res.status(500).json({ error: 'Failed to generate token or create bot session' });
+    }
+  });
+
+  // LiveKit session close endpoint
+  app.post('/livekit/close', async (req, res) => {
+    const callId = String(req.body?.callId || '');
+    if (!callId) {
+      res.status(400).json({ error: 'callId required' });
+      return;
+    }
+    await closeBotSession(callId);
+    res.json({ ok: true });
   });
 
   // Serves temporary TTS audio files
@@ -333,6 +372,7 @@ export async function startServer() {
         console.log(`⚠️ Voice Live no configurado (VOICE_LIVE_*); /ws/voice-live-test acepta conexión pero fallará en init`);
       }
       console.log(`📋 Voice backend: ${env.voiceBackend}`);
+      console.log(`🔗 Transport: ${selectTransport()}${isLiveKitConfigured() ? ' (LiveKit WebRTC)' : ' (WebSocket fallback)'}`);
       resolve();
     });
   });

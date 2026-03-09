@@ -19,13 +19,18 @@ import {
   SORRY_ES, SORRY_EN,
   GOODBYE_ES, GOODBYE_EN,
 } from './humanizer.js';
-import { llmProcessStep, buildStepContext, isConversationalLlmAvailable } from './conversationalLlm.js';
+import { llmProcessStep, llmProcessStepStreaming, buildStepContext, isConversationalLlmAvailable } from './conversationalLlm.js';
+import type { LlmExtraction } from './conversationalLlm.js';
 
 export interface DialogueTurnResult {
   state: ConversationState;
   replyText: string;
   isFinished: boolean;
   audioBase64?: string;
+  /** Optional streaming generator that yields sentences as they arrive from LLM. */
+  replyStream?: AsyncGenerator<string>;
+  /** Set when language was auto-detected and changed on this turn */
+  languageChanged?: 'es' | 'en';
 }
 
 // In-memory store — swap with Redis for multi-instance production
@@ -78,27 +83,102 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ]);
 }
 
+/**
+ * Streaming-aware wrapper for llmProcessStep.
+ * When onSentence is provided, uses the streaming variant to yield sentences
+ * as they arrive from the LLM. Otherwise falls back to non-streaming.
+ */
+async function llmStepWithStreaming(
+  state: ConversationState,
+  userText: string,
+  stepContext: ReturnType<typeof buildStepContext>,
+  onSentence?: (sentence: string) => void,
+): Promise<LlmExtraction | null> {
+  if (!onSentence) {
+    return llmProcessStep(state, userText, stepContext);
+  }
+
+  try {
+    let extraction: LlmExtraction | null = null;
+    const sentences: string[] = [];
+
+    for await (const chunk of llmProcessStepStreaming(state, userText, stepContext)) {
+      if (chunk.type === 'sentence' && chunk.text) {
+        sentences.push(chunk.text);
+        onSentence(chunk.text);
+      } else if (chunk.type === 'extraction') {
+        extraction = {
+          reply: sentences.join(' '),
+          data: chunk.data || {},
+        };
+      }
+    }
+
+    // If streaming produced sentences but no final extraction, build one
+    if (!extraction && sentences.length > 0) {
+      extraction = { reply: sentences.join(' '), data: {} };
+    }
+
+    return extraction;
+  } catch (err) {
+    console.warn('[Manager] Streaming LLM failed, falling back to non-streaming:', (err as Error).message);
+    return llmProcessStep(state, userText, stepContext);
+  }
+}
+
+/**
+ * Detect language from user text using heuristic word/pattern matching.
+ * Returns 'es' if Spanish indicators are found, 'en' otherwise.
+ */
+function detectLanguageFromText(text: string): 'es' | 'en' {
+  const lower = text.toLowerCase();
+
+  // Spanish-specific characters
+  if (/[áéíóúñ¿¡ü]/.test(lower)) return 'es';
+
+  // Common Spanish words/phrases (greetings, articles, prepositions, questions)
+  const spanishPatterns = /\b(hola|buenos?\s+d[ií]as?|buenas?\s+tardes?|buenas?\s+noches?|sí|cómo|qué|para|por favor|gracias|necesito|quiero|tengo|puedo|cita|cotización|instalación|reparación|cliente|nombre|teléfono|mañana|el\s+lunes|el\s+martes|el\s+miércoles|el\s+jueves|el\s+viernes|una\s+cita|mi\s+nombre|me\s+llamo|estoy|está|soy|quisiera|disculp[ae]|perdón)\b/;
+  if (spanishPatterns.test(lower)) return 'es';
+
+  return 'en';
+}
+
 export function handleUserInput(
   callId: string,
   userText: string | null,
+  onSentence?: (sentence: string) => void,
 ): Promise<DialogueTurnResult> {
   const trimmed = (userText || '').trim();
   let state = getConversationState(callId);
+
+  // ── Auto-detect language from first user utterance ──
+  let languageChanged: 'es' | 'en' | undefined;
+  if (trimmed && !state.languageDetected) {
+    const detected = detectLanguageFromText(trimmed);
+    state = { ...state, languageDetected: true };
+    if (detected !== state.language) {
+      console.log(`[Manager] Language auto-detected: ${state.language} → ${detected} (text: "${trimmed.substring(0, 40)}")`);
+      state = { ...state, language: detected };
+      languageChanged = detected;
+    } else {
+      console.log(`[Manager] Language confirmed: ${detected} (text: "${trimmed.substring(0, 40)}")`);
+    }
+    setConversationState(callId, state);
+  }
 
   const t = (es: string, en: string) => (state.language === 'en' ? en : es);
 
   const run = async (): Promise<DialogueTurnResult> => {
     switch (state.step) {
 
-      // ── Language selection ──────────────────────────────────────────
+      // ── Language selection (legacy fallback — now skipped by default) ──
       case 'askLanguage': {
         const lower = trimmed.toLowerCase();
-        if (trimmed === '1' || lower.includes('español') || lower.includes('spanish')) {
-          state = { ...state, language: 'es', step: 'identifyByCallerId' };
-        } else if (trimmed === '2' || lower.includes('english') || lower.includes('inglés') || lower.includes('ingles')) {
+        if (trimmed === '2' || lower.includes('english') || lower.includes('inglés') || lower.includes('ingles')) {
           state = { ...state, language: 'en', step: 'identifyByCallerId' };
         } else {
-          return { state, replyText: 'Para español, presione 1. For English, press 2.', isFinished: false };
+          // Default to Spanish
+          state = { ...state, language: 'es', step: 'identifyByCallerId' };
         }
         return run();
       }
@@ -186,7 +266,7 @@ export function handleUserInput(
           };
         }
 
-        const llmResult = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmResult = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
 
         let numChoice = NaN;
         let nameMatch: CustomerMatch | undefined;
@@ -353,7 +433,7 @@ export function handleUserInput(
           };
         }
 
-        const llmConfirm = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmConfirm = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
         let isYes = false;
         let isNo = false;
 
@@ -467,7 +547,7 @@ export function handleUserInput(
       // ── Greeting (customer identified, ask what they need) ─────────
       case 'greeting': {
         if (trimmed) {
-          const llm = await llmProcessStep(state, trimmed, buildStepContext(state));
+          const llm = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
 
           // User may have mentioned type + date in one sentence
           if (llm && llm.data.appointmentType != null) {
@@ -544,7 +624,7 @@ export function handleUserInput(
 
         state = { ...state, silenceCount: 0 };
 
-        const llmType = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmType = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
         if (llmType?.data?.appointmentType != null) {
           const aType = Number(llmType.data.appointmentType);
           if ([0, 1, 2].includes(aType)) {
@@ -607,7 +687,7 @@ export function handleUserInput(
           };
         }
 
-        const llmDate = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmDate = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
         const dateText = (llmDate?.data?.dateText as string) || trimmed;
         const parsed = parseDateTimeFromText(dateText, state.language);
 
@@ -661,7 +741,7 @@ export function handleUserInput(
           };
         }
 
-        const llmTime = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmTime = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
         const timeText = (llmTime?.data?.timeText as string) || trimmed;
         const baseISO = state.startDateISO ?? new Date().toISOString();
         const merged = mergeTimeIntoDate(baseISO, timeText, state.language);
@@ -692,7 +772,7 @@ export function handleUserInput(
 
       // ── Ask duration ───────────────────────────────────────────────
       case 'askDuration': {
-        const llmDur = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmDur = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
         let duration = state.duration ?? '01:00:00';
 
         if (llmDur?.data?.duration && typeof llmDur.data.duration === 'string') {
@@ -727,7 +807,7 @@ export function handleUserInput(
 
       // ── Confirm appointment summary ────────────────────────────────
       case 'confirmSummary': {
-        const llmConfirm = await llmProcessStep(state, trimmed, buildStepContext(state));
+        const llmConfirm = await llmStepWithStreaming(state, trimmed, buildStepContext(state), onSentence);
         let isYes = false;
         let isNo = false;
 
@@ -819,5 +899,10 @@ export function handleUserInput(
     }
   };
 
-  return run();
+  return run().then(result => {
+    if (languageChanged) {
+      result.languageChanged = languageChanged;
+    }
+    return result;
+  });
 }

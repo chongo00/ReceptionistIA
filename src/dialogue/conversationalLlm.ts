@@ -1,4 +1,4 @@
-import { isAzureOpenAIConfigured, chatWithAzureOpenAI } from '../llm/azureOpenaiClient.js';
+import { isAzureOpenAIConfigured, chatWithAzureOpenAI, streamChatWithAzureOpenAI } from '../llm/azureOpenaiClient.js';
 import type { ChatMessage } from '../llm/types.js';
 import type { ConversationState } from './state.js';
 
@@ -144,13 +144,13 @@ export function buildStepContext(state: ConversationState): StepContext {
       return {
         step: 'greeting',
         goal: lang === 'es'
-          ? 'El cliente fue identificado. Si menciona cita/appointment/agendar, pregunta de inmediato si es cotización, instalación o reparación.'
-          : 'Customer identified. If they mention appointment/schedule/booking, immediately ask if it\'s for quote, installation, or repair.',
+          ? 'El cliente fue identificado. Solo pregunta "¿en qué te puedo ayudar?". NO expliques tipos de cita a menos que el cliente pregunte explícitamente.'
+          : 'Customer identified. Simply ask "how can I help you?". Do NOT explain appointment types unless the customer explicitly asks.',
         extractFields: '{"wantsAppointment": true|false, "appointmentType": 0|1|2|null, "dateText": "date if mentioned"|null}',
         extra: customerName
           ? (lang === 'es'
-            ? `Cliente: ${customerName}. Si quiere cita pero no especifica tipo, pregúntale: "¿Es para cotización, instalación o reparación?"`
-            : `Customer: ${customerName}. If they want appointment but don't specify type, ask: "Is this for a quote, installation, or repair?"`)
+            ? `Cliente: ${customerName}. Si quiere cita pero no especifica tipo, pregúntale qué tipo de servicio necesita.`
+            : `Customer: ${customerName}. If they want an appointment but don't specify the type, ask what kind of service they need.`)
           : undefined,
       };
 
@@ -187,6 +187,7 @@ RULES:
 5. If they go off-topic, answer in ONE short phrase then redirect.
 6. NEVER make up info about services, prices, or policies.
 7. Sound like a real person. Avoid: "I understand your request", "I'd be happy to assist you with that", "Thank you for providing that information."
+8. NEVER proactively list or explain appointment types (quote/installation/repair) unless the customer asks. Just ask "how can I help?" and wait for their response.
 
 RESPONSE FORMAT — respond with EXACTLY this JSON:
 {"reply": "your natural response", "data": ${ctx.extractFields}}
@@ -217,6 +218,7 @@ REGLAS:
 5. Si se sale del tema, responde en UNA frase corta y redirige.
 6. NUNCA inventes información sobre servicios, precios o políticas.
 7. Suena como una persona real. Evita: "Entiendo su solicitud", "Con mucho gusto le atenderé", "Gracias por proporcionar esa información."
+8. NUNCA listes o expliques los tipos de cita (cotización/instalación/reparación) de forma proactiva a menos que el cliente pregunte. Solo pregunta "¿en qué te puedo ayudar?" y espera su respuesta.
 
 FORMATO DE RESPUESTA — responde con EXACTAMENTE este JSON:
 {"reply": "tu respuesta natural", "data": ${ctx.extractFields}}
@@ -250,4 +252,83 @@ function parseStructuredResponse(content: string): LlmExtraction | null {
   }
 
   return null;
+}
+
+// Sentence boundary regex: splits on . ! ? or newline followed by space/end
+const SENTENCE_BOUNDARY = /[.!?\n](?:\s|$)/;
+
+/**
+ * Streaming variant of llmProcessStep.
+ * Yields individual sentences as they accumulate from the LLM token stream.
+ * After the stream completes, yields a final extraction with parsed data.
+ */
+export async function* llmProcessStepStreaming(
+  state: ConversationState,
+  userText: string,
+  stepContext: StepContext,
+): AsyncGenerator<{ type: 'sentence' | 'extraction'; text?: string; data?: Record<string, unknown> }> {
+  if (!isAzureOpenAIConfigured()) return;
+
+  const systemPrompt = buildStepSystemPrompt(state, stepContext);
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userText || '(silence — the user did not say anything)' },
+  ];
+
+  let fullContent = '';
+  let sentenceBuffer = '';
+  let insideJson = false;
+  let braceDepth = 0;
+
+  try {
+    for await (const { delta, done } of streamChatWithAzureOpenAI(messages)) {
+      if (done) break;
+      fullContent += delta;
+
+      // Track JSON brace depth to avoid splitting mid-JSON
+      for (const ch of delta) {
+        if (ch === '{') { insideJson = true; braceDepth++; }
+        if (ch === '}') { braceDepth--; if (braceDepth <= 0) insideJson = false; }
+      }
+
+      // Only try to extract sentences from the "reply" field value
+      if (insideJson) continue;
+
+      sentenceBuffer += delta;
+
+      // Check for sentence boundaries
+      while (SENTENCE_BOUNDARY.test(sentenceBuffer)) {
+        const match = sentenceBuffer.match(SENTENCE_BOUNDARY);
+        if (!match || match.index === undefined) break;
+        const endIdx = match.index + match[0].length;
+        const sentence = sentenceBuffer.slice(0, endIdx).trim();
+        sentenceBuffer = sentenceBuffer.slice(endIdx);
+        if (sentence.length > 0) {
+          yield { type: 'sentence', text: sentence };
+        }
+      }
+    }
+
+    // Flush remaining buffer as last sentence
+    if (sentenceBuffer.trim().length > 0) {
+      yield { type: 'sentence', text: sentenceBuffer.trim() };
+    }
+
+    // Parse full response for data extraction
+    const extraction = parseStructuredResponse(fullContent);
+    yield {
+      type: 'extraction',
+      data: extraction?.data || {},
+    };
+  } catch (err) {
+    console.warn('[ConversationalLLM] Streaming error:', (err as Error).message);
+    // Fall back: yield whatever we accumulated as a single sentence
+    if (fullContent.trim()) {
+      const extraction = parseStructuredResponse(fullContent);
+      if (extraction) {
+        yield { type: 'sentence', text: extraction.reply };
+        yield { type: 'extraction', data: extraction.data };
+      }
+    }
+  }
 }

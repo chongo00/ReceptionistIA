@@ -54,7 +54,7 @@ export interface ConversationItemCreateEvent {
   item: {
     type: 'message';
     role: 'user' | 'assistant';
-    content: Array<{ type: 'input_text'; text: string }>;
+    content: Array<{ type: 'text' | 'input_text'; text: string }>;
   };
 }
 

@@ -16,6 +16,7 @@
     "node": ">=24.13.0"
   },
   "dependencies": {
+    "@livekit/rtc-node": "^0.13.24",
     "@types/ws": "^8.18.1",
     "axios": "^1.7.2",
     "body-parser": "^1.20.2",
@@ -23,6 +24,7 @@
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
+    "livekit-server-sdk": "^2.15.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.48.0",
     "mssql": "^12.2.0",
     "sharp": "^0.34.5",

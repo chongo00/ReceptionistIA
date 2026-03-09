@@ -15,7 +15,9 @@ const USE_STREAMING_TTS_FOR_SENTENCES = true;
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from '../dialogue/manager.js';
 import { loadEnv, isVoiceLiveConfigured } from '../config/env.js';
 import { VoiceLiveClient, type VoiceLiveCallbacks } from '../voiceLive/client.js';
-import { pcmToWav } from '../voiceLive/audioUtils.js';
+import { getSilenceDurationForStep } from '../dialogue/turnTaking.js';
+import { pick, BACKCHANNEL_ES, BACKCHANNEL_EN, getReminder } from '../dialogue/humanizer.js';
+
 
 const env = loadEnv();
 const MAX_CONCURRENT_SESSIONS = env.maxConcurrentSessions;
@@ -36,6 +38,7 @@ interface VoiceSession {
   silenceTimer: NodeJS.Timeout | null;
   currentTtsId: string | undefined;
   pendingBargeIn: boolean;
+  pendingTranscription: string | null;
   initAt: number;
   languageSelectedAt: number | null;
   speechFinalAt: number | null;
@@ -44,6 +47,8 @@ interface VoiceSession {
   vlClient: VoiceLiveClient | null;
   vlAudioAccumulator: Buffer[];
   vlResponseResolve: (() => void) | null;
+  reminderTimer: NodeJS.Timeout | null;
+  backchannelTimer: NodeJS.Timeout | null;
 }
 
 interface WsMessage {
@@ -52,7 +57,7 @@ interface WsMessage {
 }
 
 interface WsResponse {
-  type: 'greeting' | 'interim' | 'final' | 'audio' | 'state' | 'error' | 'finished' | 'pong';
+  type: 'greeting' | 'interim' | 'final' | 'audio' | 'state' | 'error' | 'finished' | 'pong' | 'clear';
   data?: unknown;
   text?: string;
   audioBase64?: string;
@@ -87,7 +92,7 @@ export function setupVoiceWebSocket(server: HttpServer): WebSocketServer {
     const session: VoiceSession = {
       id: sessionId,
       ws,
-      language: 'es',
+      language: env.defaultLanguage ?? 'en',
       callerId: null,
       companyPhone: null,
       recognizer: null,
@@ -98,6 +103,7 @@ export function setupVoiceWebSocket(server: HttpServer): WebSocketServer {
       silenceTimer: null,
       currentTtsId: undefined,
       pendingBargeIn: false,
+      pendingTranscription: null,
       initAt: Date.now(),
       languageSelectedAt: null,
       speechFinalAt: null,
@@ -105,6 +111,8 @@ export function setupVoiceWebSocket(server: HttpServer): WebSocketServer {
       vlClient: null,
       vlAudioAccumulator: [],
       vlResponseResolve: null,
+      reminderTimer: null,
+      backchannelTimer: null,
     };
 
     sessions.set(sessionId, session);
@@ -233,17 +241,18 @@ async function handleInit(
 ) {
   session.callerId = data.callerId ?? null;
   session.companyPhone = data.companyPhone ?? null;
-  if (data.language) session.language = data.language;
+  // Apply language from init — defaults to env DEFAULT_LANGUAGE. Auto-detection on first user utterance.
+  session.language = data.language ?? loadEnv().defaultLanguage;
 
-  console.log(`[Voice WS] Session ${session.id} initialized - caller: ${session.callerId}`);
+  console.log(`[Voice WS] Session ${session.id} initialized - caller: ${session.callerId}, lang: ${session.language}`);
 
-  if (session.callerId) {
-    const existingState = getConversationState(session.id);
-    if (!existingState.callerPhone) {
-      existingState.callerPhone = session.callerId;
-      setConversationState(session.id, existingState);
-    }
+  // Set language on conversation state so dialogue manager uses it
+  const existingState = getConversationState(session.id);
+  existingState.language = session.language;
+  if (session.callerId && !existingState.callerPhone) {
+    existingState.callerPhone = session.callerId;
   }
+  setConversationState(session.id, existingState);
 
   // Initialize Voice Live backend if configured
   if (session.voiceBackend === 'voice_live') {
@@ -279,7 +288,7 @@ async function handleInit(
     }
   } catch (err) {
     console.error(`[Voice WS] handleInit error:`, err);
-    send(session.ws, { type: 'greeting', text: 'Para español, presione 1. For English, press 2.', state: {} });
+    send(session.ws, { type: 'greeting', text: '¡Hola! Bienvenido a BlindsBook, soy Sara. ¿En qué te puedo ayudar?', state: {} });
   }
 }
 
@@ -338,6 +347,12 @@ async function handleTextInput(session: VoiceSession, data: { text: string }) {
     const result = await handleUserInput(session.id, inputText);
     setConversationState(session.id, result.state);
 
+    // Auto language switch
+    if (result.languageChanged) {
+      session.language = result.languageChanged;
+      send(session.ws, { type: 'state', data: { languageDetected: session.language } });
+    }
+
     console.log(`[Voice WS] Dialogue response in ${Date.now() - startMs}ms: step=${result.state.step}, finished=${result.isFinished}`);
 
     send(session.ws, {
@@ -366,6 +381,7 @@ function cancelCurrentSpeech(session: VoiceSession): void {
   session.isSpeaking = false;
   session.currentTtsId = undefined;
   session.pendingBargeIn = true;
+  send(session.ws, { type: 'clear' });
   send(session.ws, { type: 'state', data: { speaking: false } });
 }
 
@@ -493,9 +509,83 @@ async function processSpeechResult(session: VoiceSession, text: string) {
   session.isSpeaking = true;
   session.interimText = '';
 
+  // Track whether streaming pipeline spoke sentences already
+  let streamedSentenceCount = 0;
+
+  // Callback for streaming: speak each sentence as it arrives from LLM
+  const onSentence = (sentence: string) => {
+    streamedSentenceCount++;
+    console.log(`[Voice WS] Streaming sentence #${streamedSentenceCount} for ${session.id}: "${sentence.substring(0, 50)}..."`);
+
+    if (session.voiceBackend === 'voice_live' && session.vlClient?.connected) {
+      // Voice Live path: send each sentence immediately for TTS
+      if (streamedSentenceCount === 1) {
+        session.isSpeaking = true;
+        send(session.ws, { type: 'state', data: { speaking: true } });
+      }
+      session.vlClient.speakSentence(sentence);
+    } else {
+      // Local TTS path: synthesize each sentence as it arrives
+      if (streamedSentenceCount === 1) {
+        session.isSpeaking = true;
+        send(session.ws, { type: 'state', data: { speaking: true } });
+      }
+      const ttsId = session.currentTtsId;
+      synthesizeSpeechStreaming(sentence, session.language, {
+        onAudioChunk: (chunk) => {
+          if (session.currentTtsId !== ttsId || session.ws.readyState !== WebSocket.OPEN) return;
+          if (session.speechFinalAt != null && streamedSentenceCount === 1) {
+            const tUserFinalToFirstChunk = Date.now() - session.speechFinalAt;
+            console.log(`[Voice WS] t_user_final_to_first_audio_chunk=${tUserFinalToFirstChunk}ms (streaming)`);
+            session.speechFinalAt = null; // Only log once
+          }
+          send(session.ws, {
+            type: 'audio',
+            audioBase64: chunk.toString('base64'),
+            text: sentence,
+            data: { sentenceIndex: streamedSentenceCount - 1, streaming: true },
+          });
+        },
+        onComplete: () => {},
+        onError: () => {},
+      }).catch((err) => {
+        console.warn(`[Voice WS] Streaming TTS error for sentence:`, err);
+      });
+    }
+  };
+
   try {
-    const result = await handleUserInput(session.id, text);
+    // Set up TTS ID for barge-in detection (local path)
+    if (session.voiceBackend !== 'voice_live') {
+      session.currentTtsId = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      session.pendingBargeIn = false;
+    }
+
+    const result = await handleUserInput(session.id, text, onSentence);
     setConversationState(session.id, result.state);
+
+    // ── Auto language switch: reconfigure STT/TTS/Voice Live if language changed ──
+    if (result.languageChanged) {
+      session.language = result.languageChanged;
+      console.log(`[Voice WS] Language auto-switched to '${session.language}' for ${session.id}`);
+
+      // Notify browser of language change
+      send(session.ws, { type: 'state', data: { languageDetected: session.language } });
+
+      // Reconfigure Voice Live if active
+      if (session.voiceBackend === 'voice_live' && session.vlClient?.connected) {
+        session.vlClient.sendSessionUpdate({
+          voice: resolveVoiceForVL(session.language),
+          input_audio_transcription: { model: 'azure-speech', language: session.language },
+          turn_detection: {
+            type: 'azure_semantic_vad_multilingual',
+            create_response: false,
+            silence_duration_ms: 500,
+            languages: [session.language === 'en' ? 'en' : 'es', session.language === 'en' ? 'es' : 'en'],
+          },
+        });
+      }
+    }
 
     send(session.ws, {
       type: result.isFinished ? 'finished' : 'final',
@@ -503,12 +593,51 @@ async function processSpeechResult(session: VoiceSession, text: string) {
       state: result.state,
     });
 
-    await speakResponse(session, result.replyText);
+    // If streaming pipeline already spoke sentences, skip speakResponse
+    if (streamedSentenceCount > 0) {
+      console.log(`[Voice WS] Streaming pipeline spoke ${streamedSentenceCount} sentence(s) — skipping speakResponse`);
+      // For Voice Live: wait for the response to finish (onResponseDone callback)
+      if (session.voiceBackend === 'voice_live' && session.vlClient?.connected) {
+        await new Promise<void>((resolve) => {
+          session.vlResponseResolve = resolve;
+          setTimeout(() => {
+            if (session.vlResponseResolve === resolve) {
+              session.vlResponseResolve = null;
+              resolve();
+            }
+          }, 30_000);
+        });
+      }
+    } else {
+      // No streaming occurred — fall back to full speakResponse
+      await speakResponse(session, result.replyText);
+    }
 
     session.isSpeaking = false;
 
     if (!result.isFinished) {
       await startListening(session);
+
+      // Update Voice Live silence duration based on dialogue step
+      if (session.voiceBackend === 'voice_live' && session.vlClient?.connected) {
+        const baseSilenceMs = Math.round(500 + (1 - env.turnResponsiveness) * 1000);
+        const stepSilenceMs = getSilenceDurationForStep(result.state.step, baseSilenceMs);
+        session.vlClient.sendSessionUpdate({
+          turn_detection: {
+            type: 'azure_semantic_vad_multilingual',
+            create_response: false,
+            silence_duration_ms: stepSilenceMs,
+          },
+        });
+      }
+    }
+
+    // Process queued transcription if any (Voice Live path)
+    if (session.pendingTranscription) {
+      const queued = session.pendingTranscription;
+      session.pendingTranscription = null;
+      console.log(`[Voice WS] Processing queued transcription for ${session.id}: "${queued}"`);
+      await processSpeechResult(session, queued);
     }
   } catch (err) {
     console.error(`[Voice WS] processSpeechResult error for session ${session.id}:`, err);
@@ -516,6 +645,13 @@ async function processSpeechResult(session: VoiceSession, text: string) {
     send(session.ws, { type: 'error', text: `Processing error: ${String(err)}` });
     // Resume listening to avoid dead sessions
     await startListening(session).catch(() => {});
+
+    // Process queued transcription even after error
+    if (session.pendingTranscription) {
+      const queued = session.pendingTranscription;
+      session.pendingTranscription = null;
+      await processSpeechResult(session, queued);
+    }
   }
 }
 
@@ -657,10 +793,68 @@ function cleanupSession(session: VoiceSession) {
     session.vlClient.close();
     session.vlClient = null;
   }
+  if (session.reminderTimer) {
+    clearTimeout(session.reminderTimer);
+    session.reminderTimer = null;
+  }
+  if (session.backchannelTimer) {
+    clearTimeout(session.backchannelTimer);
+    session.backchannelTimer = null;
+  }
   session.vlAudioAccumulator = [];
   session.vlResponseResolve = null;
   clearConversationState(session.id);
   sessions.delete(session.id);
+}
+
+// ── Reminder timer ────────────────────────────────────────────────────
+
+function startReminderTimer(session: VoiceSession): void {
+  cancelReminderTimer(session);
+  const state = getConversationState(session.id);
+  if (!state || state.step === 'completed' || state.step === 'creatingAppointment') return;
+
+  session.reminderTimer = setTimeout(async () => {
+    if (!session.isListening && !session.isSpeaking) return;
+    const currentState = getConversationState(session.id);
+    const reminder = getReminder(currentState.step, currentState.language);
+    console.log(`[Voice WS] Sending reminder for ${session.id}: "${reminder}"`);
+    await speakResponse(session, reminder).catch(() => {});
+    // Re-arm the timer for a second reminder
+    startReminderTimer(session);
+  }, env.reminderTriggerMs);
+}
+
+function cancelReminderTimer(session: VoiceSession): void {
+  if (session.reminderTimer) {
+    clearTimeout(session.reminderTimer);
+    session.reminderTimer = null;
+  }
+}
+
+// ── Backchanneling ────────────────────────────────────────────────────
+
+function startBackchannelTimer(session: VoiceSession): void {
+  cancelBackchannelTimer(session);
+  if (!env.enableBackchanneling) return;
+
+  session.backchannelTimer = setTimeout(() => {
+    // Only emit backchannel if user is still speaking (speech stopped but no final transcript yet)
+    if (session.isSpeaking || !session.isListening) return;
+    const state = getConversationState(session.id);
+    const phrases = state.language === 'en' ? BACKCHANNEL_EN : BACKCHANNEL_ES;
+    const phrase = pick(phrases);
+    console.log(`[Voice WS] Backchannel for ${session.id}: "${phrase}"`);
+    // Fire-and-forget TTS — does NOT advance dialogue state
+    speakResponse(session, phrase).catch(() => {});
+  }, 2000);
+}
+
+function cancelBackchannelTimer(session: VoiceSession): void {
+  if (session.backchannelTimer) {
+    clearTimeout(session.backchannelTimer);
+    session.backchannelTimer = null;
+  }
 }
 
 function send(ws: WebSocket, response: WsResponse) {
@@ -677,7 +871,8 @@ function resolveVoiceForVL(language: SpeechLanguage) {
       ? (env.azureTtsVoiceEn || 'en-US-JennyNeural')
       : (env.azureTtsVoiceEs || 'es-MX-DaliaNeural'),
     type: 'azure-standard' as const,
-    temperature: 0.8,
+    temperature: 0.9,
+    rate: '1.05',
   };
 }
 
@@ -693,11 +888,12 @@ async function initVoiceLiveForSession(session: VoiceSession): Promise<void> {
   );
 
   session.vlClient.sendSessionUpdate({
-    instructions: 'You are a receptionist. When given specific text to repeat, you must repeat it exactly without changes.',
+    instructions: 'You are Sara, a warm and friendly receptionist for BlindsBook. Speak in a natural, conversational tone as if you are on a phone call. Use natural pacing with slight pauses between sentences. Never sound robotic or rushed.',
     turn_detection: {
       type: 'azure_semantic_vad_multilingual',
       create_response: false,
       silence_duration_ms: 500,
+      remove_filler_words: true,
       languages: [session.language === 'en' ? 'en' : 'es', session.language === 'en' ? 'es' : 'en'],
     },
     input_audio_noise_reduction: { type: 'azure_deep_noise_suppression' },
@@ -728,41 +924,55 @@ function createVoiceLiveCallbacksForSession(session: VoiceSession): VoiceLiveCal
           session.vlAudioAccumulator = [];
         }
       }
+      cancelReminderTimer(session);
+      cancelBackchannelTimer(session);
       send(session.ws, { type: 'state', data: { listening: true } });
     },
     onSpeechStopped: () => {
       send(session.ws, { type: 'state', data: { listening: false } });
+      // Start backchannel timer (fire-and-forget "uh-huh" after 2s)
+      startBackchannelTimer(session);
     },
     onTranscriptionCompleted: async (text: string) => {
       if (!text.trim()) return;
+      cancelBackchannelTimer(session);
+      cancelReminderTimer(session);
       console.log(`[Voice WS] VL transcription for ${session.id}: "${text}"`);
       send(session.ws, { type: 'interim', text });
+
+      // Queue if already processing to avoid silent drops
+      if (session.isSpeaking) {
+        session.pendingTranscription = text.trim();
+        console.log(`[Voice WS] Queued VL transcription (busy) for ${session.id}: "${text.trim()}"`);
+        return;
+      }
+
       await processSpeechResult(session, text.trim());
     },
-    onAudioDelta: (base64Audio: string) => {
-      session.vlAudioAccumulator.push(Buffer.from(base64Audio, 'base64'));
+    onAudioDelta: (base64Audio: string, responseId: string) => {
+      // Stream raw PCM directly — AudioWorklet on the browser handles it natively
+      send(session.ws, {
+        type: 'audio',
+        audioBase64: base64Audio,
+        data: { format: 'pcm', sampleRate: 24000, responseId },
+      });
     },
-    onAudioDone: () => {
-      if (session.vlAudioAccumulator.length > 0) {
-        const pcm = Buffer.concat(session.vlAudioAccumulator);
-        session.vlAudioAccumulator = [];
-        const wav = pcmToWav(pcm, 24000, 16, 1);
-        send(session.ws, {
-          type: 'audio',
-          audioBase64: wav.toString('base64'),
-        });
-      }
+    onAudioDone: (_responseId: string) => {
+      // All audio chunks already sent progressively — just clean up
+      session.vlAudioAccumulator = [];
     },
     onAudioTranscriptDelta: () => {
       // Debug: what Voice Live TTS is saying
     },
-    onResponseDone: () => {
+    onResponseDone: (_responseId: string) => {
       session.isSpeaking = false;
       send(session.ws, { type: 'state', data: { speaking: false } });
       if (session.vlResponseResolve) {
         session.vlResponseResolve();
         session.vlResponseResolve = null;
       }
+      // Start reminder timer after the system finishes speaking
+      startReminderTimer(session);
     },
     onError: (error: Error) => {
       console.error(`[Voice WS] Voice Live error for ${session.id}:`, error);
