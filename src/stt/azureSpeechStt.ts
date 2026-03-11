@@ -12,6 +12,8 @@ export interface RecognitionResult {
 
 export interface SttConfig {
   language: SpeechLanguage;
+  /** When true, auto-detect between es-ES and en-US instead of using a fixed language */
+  autoDetect?: boolean;
   onInterim?: (result: RecognitionResult) => void;
   onFinal?: (result: RecognitionResult) => void;
   onError?: (error: Error) => void;
@@ -39,13 +41,17 @@ function getCredentials(): { key: string; region: string } {
   return { key: _azureKey, region: _azureRegion };
 }
 
-function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number): sdk.SpeechConfig {
+function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number, autoDetect?: boolean): sdk.SpeechConfig {
   const { key, region } = getCredentials();
   const cfg = sdk.SpeechConfig.fromSubscription(key, region);
 
   cfg.outputFormat = sdk.OutputFormat.Detailed;
   cfg.setProfanity(sdk.ProfanityOption.Masked);
-  cfg.speechRecognitionLanguage = LANG_CODES[language];
+
+  // Don't set speechRecognitionLanguage when auto-detect is enabled
+  if (!autoDetect) {
+    cfg.speechRecognitionLanguage = LANG_CODES[language];
+  }
 
   cfg.setProperty(
     sdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
@@ -59,6 +65,16 @@ function createSttConfig(language: SpeechLanguage, silenceTimeoutMs?: number): s
   return cfg;
 }
 
+function extractDetectedLanguage(result: sdk.SpeechRecognitionResult): SpeechLanguage | undefined {
+  try {
+    const autoResult = sdk.AutoDetectSourceLanguageResult.fromResult(result);
+    const detectedLang = autoResult.language;
+    if (detectedLang?.startsWith('es')) return 'es';
+    if (detectedLang?.startsWith('en')) return 'en';
+  } catch { /* ignore — not in auto-detect mode */ }
+  return undefined;
+}
+
 export function createPushStreamRecognizer(
   config: SttConfig
 ): {
@@ -67,20 +83,30 @@ export function createPushStreamRecognizer(
   start: () => Promise<void>;
   stop: () => Promise<void>;
 } {
-  const speechCfg = createSttConfig(config.language, config.silenceTimeoutMs);
+  const speechCfg = createSttConfig(config.language, config.silenceTimeoutMs, config.autoDetect);
 
   const audioFormat = sdk.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1);
   const pushStream = sdk.AudioInputStream.createPushStream(audioFormat);
   const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
 
-  const recognizer = new sdk.SpeechRecognizer(speechCfg, audioConfig);
+  let recognizer: sdk.SpeechRecognizer;
+
+  if (config.autoDetect) {
+    const autoDetectConfig = sdk.AutoDetectSourceLanguageConfig.fromLanguages([
+      LANG_CODES.es, // es-ES
+      LANG_CODES.en, // en-US
+    ]);
+    recognizer = sdk.SpeechRecognizer.FromConfig(speechCfg, autoDetectConfig, audioConfig);
+  } else {
+    recognizer = new sdk.SpeechRecognizer(speechCfg, audioConfig);
+  }
 
   recognizer.recognizing = (_, event) => {
     if (event.result.reason === sdk.ResultReason.RecognizingSpeech) {
       config.onInterim?.({
         text: event.result.text,
         isFinal: false,
-        language: config.language,
+        language: extractDetectedLanguage(event.result) ?? config.language,
       });
     }
   };
@@ -88,13 +114,14 @@ export function createPushStreamRecognizer(
   recognizer.recognized = (_, event) => {
     if (event.result.reason === sdk.ResultReason.RecognizedSpeech) {
       const detailed = event.result as sdk.SpeechRecognitionResult;
+      const detectedLang = extractDetectedLanguage(event.result);
       config.onFinal?.({
         text: event.result.text,
         isFinal: true,
         confidence: detailed.properties?.getProperty(sdk.PropertyId.SpeechServiceResponse_JsonResult)
           ? JSON.parse(detailed.properties.getProperty(sdk.PropertyId.SpeechServiceResponse_JsonResult))?.NBest?.[0]?.Confidence
           : undefined,
-        language: config.language,
+        language: detectedLang ?? config.language,
       });
     } else if (event.result.reason === sdk.ResultReason.NoMatch) {
       config.onSilence?.();

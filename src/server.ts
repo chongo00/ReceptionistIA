@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import bodyParser from 'body-parser';
 import cors from 'cors';
-import { handleUserInput, getConversationState, setConversationState, clearConversationState } from './dialogue/manager.js';
+import { handleUserInput, getConversationState, setConversationState, clearConversationState, setPrefetchedPhoneMatches } from './dialogue/manager.js';
 import { loadEnv } from './config/env.js';
 import { setTokenForCompany, clearTokenOverride, createAppointment, initTokenManager, findCustomersByPhone } from './blindsbook/appointmentsClient.js';
 import type { CreateAppointmentPayload } from './models/appointments.js';
@@ -19,6 +19,7 @@ import { isAzureSttConfigured } from './stt/azureSpeechStt.js';
 import { setupVoiceLiveTestWebSocket, shutdownVoiceLiveTestWebSocket, isVoiceLiveConfigured } from './realtime/voiceLiveWebSocket.js';
 import { isLiveKitConfigured, generateLiveKitToken, selectTransport } from './realtime/livekitTransport.js';
 import { createBotSession, closeBotSession, getActiveBotSessionCount } from './webrtc/botParticipant.js';
+import { warmUpAndPreCacheGreetings } from './tts/ttsGreetingCache.js';
 
 export async function startServer() {
   const app = express();
@@ -53,6 +54,15 @@ export async function startServer() {
     });
   });
 
+  // Return list of configured companies (used by voice-test UI)
+  app.get('/livekit/companies', (_req, res) => {
+    const companies: { phone: string; companyId: number }[] = [];
+    for (const [phone, cfg] of env.phoneToCompanyMap.entries()) {
+      companies.push({ phone, companyId: cfg.companyId });
+    }
+    res.json(companies);
+  });
+
   // LiveKit token endpoint — used by browser clients to join a room
   // Also spawns a bot participant that handles the dialogue in the same room.
   app.post('/livekit/token', async (req, res) => {
@@ -63,17 +73,48 @@ export async function startServer() {
     const roomName = String(req.body?.roomName || `voice-${Date.now()}`);
     const identity = String(req.body?.identity || `user-${Date.now()}`);
     const callId = String(req.body?.callId || roomName);
+    const fromNumber = typeof req.body?.fromNumber === 'string' ? req.body.fromNumber : null;
+    const toNumber = typeof req.body?.toNumber === 'string' ? req.body.toNumber : null;
     try {
-      // Generate token for the browser user
+      // Set company token BEFORE any API calls so lookups use the right company
+      if (toNumber) {
+        const cfg = env.phoneToCompanyMap.get(toNumber);
+        if (cfg) setTokenForCompany(cfg);
+      }
+
+      // Pre-populate conversation state with caller metadata
+      if (fromNumber || toNumber) {
+        const existingState = getConversationState(callId);
+        if (fromNumber && !existingState.callerPhone) {
+          existingState.callerPhone = fromNumber;
+        }
+        setConversationState(callId, existingState);
+      }
+
+      // Pre-fetch phone lookup in background so it's ready when the greeting fires
+      if (fromNumber) {
+        findCustomersByPhone(fromNumber).then(matches => {
+          if (matches.length > 0) {
+            setPrefetchedPhoneMatches(callId, matches);
+            console.log(`[LiveKit] Pre-fetched phone lookup for ${callId}: ${matches.length} match(es)`);
+          }
+        }).catch(() => {});
+      }
+
+      // Generate token for the browser user (local JWT — fast)
       const token = await generateLiveKitToken(roomName, identity);
 
-      // Spawn the server-side bot participant in the same room
-      await createBotSession(roomName, callId);
-
+      // Respond to the browser IMMEDIATELY so it can start connecting in parallel.
+      // The bot connection happens in the background — the browser doesn't need to wait.
       res.json({ token, wsUrl: env.livekitWsUrl, roomName, callId });
+
+      // Spawn the bot participant in the background (don't block the HTTP response)
+      createBotSession(roomName, callId).catch(err => {
+        console.error('[LiveKit] Bot session creation failed:', err);
+      });
     } catch (err) {
-      console.error('[LiveKit] Token generation / bot session error:', err);
-      res.status(500).json({ error: 'Failed to generate token or create bot session' });
+      console.error('[LiveKit] Token generation error:', err);
+      res.status(500).json({ error: 'Failed to generate token' });
     }
   });
 
@@ -335,6 +376,11 @@ export async function startServer() {
   } catch (err) {
     console.error('[Auth] Error inicializando TokenManager (continuando sin auto-login):', err);
   }
+
+  // Pre-warm Azure Speech SDK and cache common greetings as PCM for instant LiveKit playback
+  warmUpAndPreCacheGreetings().catch((err) => {
+    console.warn('[TTS Cache] Warm-up failed (non-fatal):', err);
+  });
 
   const port = Number(process.env.PORT || 4000);
   const httpServer = createServer(app);

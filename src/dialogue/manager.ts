@@ -36,6 +36,14 @@ export interface DialogueTurnResult {
 // In-memory store — swap with Redis for multi-instance production
 const conversationStore = new Map<string, ConversationState>();
 
+// Pre-fetched phone lookup results (populated by server.ts when the token is requested)
+const phoneLookupPrefetch = new Map<string, CustomerMatch[]>();
+
+/** Store pre-fetched phone lookup results so the greeting flow can skip the network call. */
+export function setPrefetchedPhoneMatches(callId: string, matches: CustomerMatch[]): void {
+  phoneLookupPrefetch.set(callId, matches);
+}
+
 export function getConversationState(callId: string): ConversationState {
   let state = conversationStore.get(callId);
   if (!state) {
@@ -203,8 +211,16 @@ export function handleUserInput(
 
         let matches: CustomerMatch[] = [];
         try {
-          matches = await withTimeout(findCustomersByPhone(phone), PHONE_LOOKUP_TIMEOUT_MS, []);
-          console.log(`[Identify] Phone lookup: ${matches.length} matches`);
+          // Use pre-fetched results from server.ts if available (saves ~3s)
+          const prefetched = phoneLookupPrefetch.get(state.callId);
+          if (prefetched) {
+            phoneLookupPrefetch.delete(state.callId);
+            matches = prefetched;
+            console.log(`[Identify] Phone lookup: ${matches.length} matches (pre-fetched)`);
+          } else {
+            matches = await withTimeout(findCustomersByPhone(phone), PHONE_LOOKUP_TIMEOUT_MS, []);
+            console.log(`[Identify] Phone lookup: ${matches.length} matches`);
+          }
         } catch (err) {
           console.warn('[Identify] Phone lookup failed:', err);
         }
@@ -900,6 +916,17 @@ export function handleUserInput(
   };
 
   return run().then(result => {
+    // Record conversation turns so the LLM has context on next call
+    const turns = [...(result.state.conversationTurns || [])];
+    if (trimmed) {
+      turns.push({ role: 'user', text: trimmed });
+    }
+    if (result.replyText) {
+      turns.push({ role: 'assistant', text: result.replyText });
+    }
+    // Keep only last 12 messages (~6 exchanges) to avoid context overflow
+    result.state = { ...result.state, conversationTurns: turns.slice(-12) };
+
     if (languageChanged) {
       result.languageChanged = languageChanged;
     }

@@ -18,11 +18,7 @@ export async function llmProcessStep(
 ): Promise<LlmExtraction | null> {
   if (!isAzureOpenAIConfigured()) return null;
 
-  const systemPrompt = buildStepSystemPrompt(state, stepContext);
-  const messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userText || '(silence — the user did not say anything)' },
-  ];
+  const messages = buildLlmMessages(state, userText, stepContext);
 
   try {
     const result = await chatWithAzureOpenAI(messages);
@@ -159,6 +155,23 @@ export function buildStepContext(state: ConversationState): StepContext {
   }
 }
 
+/**
+ * Build the full message array for LLM calls, including conversation history.
+ * Places system prompt first, then recent turns, then current user input.
+ */
+function buildLlmMessages(state: ConversationState, userText: string, stepContext: StepContext): ChatMessage[] {
+  const systemPrompt = buildStepSystemPrompt(state, stepContext);
+  const history = (state.conversationTurns || []).slice(-10).map(turn => ({
+    role: turn.role as 'user' | 'assistant',
+    content: turn.text,
+  }));
+  return [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: userText || '(silence — the user did not say anything)' },
+  ];
+}
+
 function buildStepSystemPrompt(state: ConversationState, ctx: StepContext): string {
   const lang = state.language === 'en' ? 'en' : 'es';
 
@@ -188,6 +201,13 @@ RULES:
 6. NEVER make up info about services, prices, or policies.
 7. Sound like a real person. Avoid: "I understand your request", "I'd be happy to assist you with that", "Thank you for providing that information."
 8. NEVER proactively list or explain appointment types (quote/installation/repair) unless the customer asks. Just ask "how can I help?" and wait for their response.
+
+CONVERSATION AWARENESS:
+- The conversation history is included above. Use it to maintain continuity.
+- NEVER re-ask for information the customer already provided.
+- Reference what the customer said earlier when relevant ("like you mentioned...").
+- If the customer seems frustrated or repeats themselves, acknowledge it and move forward.
+- Adapt your tone to match the customer's energy — if they're brief, be brief; if chatty, engage a bit.
 
 RESPONSE FORMAT — respond with EXACTLY this JSON:
 {"reply": "your natural response", "data": ${ctx.extractFields}}
@@ -219,6 +239,13 @@ REGLAS:
 6. NUNCA inventes información sobre servicios, precios o políticas.
 7. Suena como una persona real. Evita: "Entiendo su solicitud", "Con mucho gusto le atenderé", "Gracias por proporcionar esa información."
 8. NUNCA listes o expliques los tipos de cita (cotización/instalación/reparación) de forma proactiva a menos que el cliente pregunte. Solo pregunta "¿en qué te puedo ayudar?" y espera su respuesta.
+
+CONCIENCIA DE CONVERSACIÓN:
+- El historial de la conversación está incluido arriba. Úsalo para mantener continuidad.
+- NUNCA vuelvas a pedir información que el cliente ya proporcionó.
+- Haz referencia a lo que el cliente dijo antes cuando sea relevante ("como me comentaste...").
+- Si el cliente parece frustrado o se repite, reconócelo y avanza.
+- Adapta tu tono al del cliente — si es breve, sé breve; si es conversador, engancha un poco.
 
 FORMATO DE RESPUESTA — responde con EXACTAMENTE este JSON:
 {"reply": "tu respuesta natural", "data": ${ctx.extractFields}}
@@ -269,11 +296,7 @@ export async function* llmProcessStepStreaming(
 ): AsyncGenerator<{ type: 'sentence' | 'extraction'; text?: string; data?: Record<string, unknown> }> {
   if (!isAzureOpenAIConfigured()) return;
 
-  const systemPrompt = buildStepSystemPrompt(state, stepContext);
-  const messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userText || '(silence — the user did not say anything)' },
-  ];
+  const messages = buildLlmMessages(state, userText, stepContext);
 
   let fullContent = '';
   let sentenceBuffer = '';

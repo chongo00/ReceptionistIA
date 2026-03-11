@@ -151,6 +151,14 @@
   </div>
   <div class="dialer-row" style="margin-top:8px;">
     <label style="color:var(--mute);font-size:.85rem;display:flex;align-items:center;gap:8px;flex:1;">
+      Compañía:
+      <select id="companyPhone" style="flex:1;background:#1a2440;border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:.9rem;">
+        <option value="">— Ninguna (default) —</option>
+      </select>
+    </label>
+  </div>
+  <div class="dialer-row" style="margin-top:8px;">
+    <label style="color:var(--mute);font-size:.85rem;display:flex;align-items:center;gap:8px;flex:1;">
       Language:
       <span style="flex:1;background:#1a2440;border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:10px;font-size:.9rem;text-align:center;">
         Auto-detect (starts in English)
@@ -468,6 +476,12 @@ async function startCallLiveKit(phone) {
     var roomName = 'voice-' + Date.now();
     var identity = 'user-' + Date.now();
 
+    // Determine company phone (toNumber) from the company selector
+    var toNumberVal = document.getElementById('companyPhone').value || null;
+    // The customer phone input doubles as caller ID for LiveKit
+    var fromNumberVal = phone || null;
+
+    // Build request with caller metadata so the bot can identify the customer immediately
     var resp = await fetch(API_BASE + '/livekit/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -475,6 +489,8 @@ async function startCallLiveKit(phone) {
         roomName: roomName,
         identity: identity,
         callId: roomName,
+        fromNumber: fromNumberVal,
+        toNumber: toNumberVal,
       }),
     });
 
@@ -531,14 +547,18 @@ async function startCallLiveKit(phone) {
       }
     });
 
+    // Track whether browser successfully connected (to avoid premature hangup)
+    var lkConnected = false;
+
     lkRoom.on(LK.RoomEvent.Disconnected, function(reason) {
       log('🔌 LiveKit disconnected: ' + reason, 'warn');
-      if (callActive) hangUp();
+      if (callActive && lkConnected) hangUp();
     });
 
     // 4. Connect to the room
     log('🔗 Connecting to LiveKit room...', 'warn');
     await lkRoom.connect(data.wsUrl, data.token);
+    lkConnected = true;
     log('✅ Connected to LiveKit room!', 'ok');
     setConnectionStatus('connected', 'LiveKit WebRTC');
 
@@ -554,6 +574,19 @@ async function startCallLiveKit(phone) {
   } catch(err) {
     log('❌ LiveKit error: ' + err.message, 'err');
     addMessage('system', '⚠️ Error de conexión LiveKit: ' + err.message);
+    // Clean up: notify server to close bot session since browser can't join
+    if (lkCallId) {
+      fetch(API_BASE + '/livekit/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: lkCallId }),
+      }).catch(function() {});
+      lkCallId = null;
+    }
+    if (lkRoom) {
+      try { lkRoom.disconnect(); } catch(e) {}
+      lkRoom = null;
+    }
     document.getElementById('btnCall').disabled = false;
     document.getElementById('btnCall').textContent = '📞 Llamar';
     callActive = false;
@@ -572,6 +605,15 @@ function handleLiveKitBotMessage(msg) {
       }
       if (msg.isFinished) {
         showFinished(msg.state);
+      }
+      break;
+    case 'interim':
+      document.getElementById('interimText').textContent = '💬 "' + msg.text + '"';
+      break;
+    case 'transcription':
+      document.getElementById('interimText').textContent = '';
+      if (msg.text) {
+        addMessage('user', msg.text);
       }
       break;
     case 'session-end':
@@ -1197,6 +1239,19 @@ window.addEventListener('load', function() {
 
   // No auto-connect; connection happens when user clicks 'Llamar'
   // (the backend selector must be chosen first)
+
+  // Populate company selector from server
+  fetch(API_BASE + '/livekit/companies').then(function(r) { return r.json(); }).then(function(companies) {
+    var sel = document.getElementById('companyPhone');
+    companies.forEach(function(c) {
+      var opt = document.createElement('option');
+      opt.value = c.phone;
+      opt.textContent = c.phone + ' (Company ' + c.companyId + ')';
+      sel.appendChild(opt);
+    });
+    // Default to first company
+    if (companies.length > 0) sel.value = companies[0].phone;
+  }).catch(function() {});
 });
 </script>
 </body>

@@ -1,9 +1,9 @@
-import { isAzureTtsConfigured as isAzureSdkConfigured, synthesizeSpeech, type TtsOutputFormat } from './azureSpeechSdkTts.js';
+import { isAzureTtsConfigured as isAzureSdkConfigured, synthesizeSpeech, synthesizeSpeechStreaming, type TtsOutputFormat, type StreamingTtsCallbacks } from './azureSpeechSdkTts.js';
 import { isAzureTtsConfigured, synthesizeAzureMp3 } from './azureNeuralTts.js';
 
 type SpeechLang = 'es' | 'en';
 
-export type { TtsOutputFormat };
+export type { TtsOutputFormat, StreamingTtsCallbacks };
 
 export interface TtsSynthResult {
   bytes: Buffer;
@@ -25,10 +25,16 @@ export async function synthesizeTts(
     }
   }
 
-  // REST fallback only supports MP3 — if PCM was requested but SDK failed, log warning
+  // REST fallback only supports MP3. Sending MP3 bytes as raw PCM to LiveKit produces
+  // static noise, so we refuse the fallback when PCM is explicitly required.
   if (isAzureTtsConfigured()) {
     if (outputFormat === 'pcm16k') {
-      console.warn('[TTS] REST fallback does not support PCM format — falling back to MP3 (audio may not work for LiveKit)');
+      console.error(
+        '[TTS] Azure Speech SDK is required for PCM/LiveKit but failed. ' +
+        'REST fallback returns MP3 which cannot be used as raw PCM. ' +
+        'Check AZURE_SPEECH_KEY / AZURE_SPEECH_REGION and the SDK logs above.',
+      );
+      return null;
     }
     try {
       const result = await synthesizeAzureMp3(text, language);
@@ -39,4 +45,21 @@ export async function synthesizeTts(
   }
 
   return null;
+}
+
+/**
+ * Streaming TTS: calls onAudioChunk with PCM chunks as they arrive from Azure.
+ * First audio bytes arrive within ~1-2s instead of waiting for full synthesis.
+ */
+export async function synthesizeTtsStreaming(
+  text: string,
+  language: SpeechLang,
+  callbacks: StreamingTtsCallbacks,
+  outputFormat: TtsOutputFormat = 'pcm16k',
+): Promise<void> {
+  if (!isAzureSdkConfigured()) {
+    callbacks.onError(new Error('Azure Speech SDK not configured for streaming TTS'));
+    return;
+  }
+  return synthesizeSpeechStreaming(text, language, callbacks, outputFormat);
 }

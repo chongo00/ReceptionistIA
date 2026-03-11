@@ -29,9 +29,11 @@ import {
 import { loadEnv } from '../config/env.js';
 import { generateLiveKitToken } from '../realtime/livekitTransport.js';
 import { handleUserInput, getConversationState, setConversationState, clearConversationState } from '../dialogue/manager.js';
-import { synthesizeTts } from '../tts/ttsProvider.js';
+import { synthesizeTts, synthesizeTtsStreaming } from '../tts/ttsProvider.js';
+import { getCachedGreetingFrames, PCM_SAMPLE_RATE, SAMPLES_PER_FRAME } from '../tts/ttsGreetingCache.js';
 import { getSilenceDurationForStep } from '../dialogue/turnTaking.js';
 import { getReminder } from '../dialogue/humanizer.js';
+import { createPushStreamRecognizer, isAzureSttConfigured } from '../stt/azureSpeechStt.js';
 
 const SAMPLE_RATE = 16000;
 const NUM_CHANNELS = 1;
@@ -46,6 +48,12 @@ export interface BotSession {
   // Timers
   silenceTimer: ReturnType<typeof setTimeout> | null;
   reminderTimer: ReturnType<typeof setTimeout> | null;
+  disconnectGraceTimer: ReturnType<typeof setTimeout> | null;
+  // STT (Azure Speech-to-Text)
+  sttRecognizer: ReturnType<typeof createPushStreamRecognizer> | null;
+  sttStarted: boolean;
+  sttLanguage: 'es' | 'en' | 'auto';
+  interimText: string;
   // Audio accumulator for STT
   audioBuffer: Int16Array[];
   speechActive: boolean;
@@ -75,6 +83,11 @@ export async function createBotSession(roomName: string, callId: string): Promis
     isClosed: false,
     silenceTimer: null,
     reminderTimer: null,
+    disconnectGraceTimer: null,
+    sttRecognizer: null,
+    sttStarted: false,
+    sttLanguage: 'auto',
+    interimText: '',
     audioBuffer: [],
     speechActive: false,
   };
@@ -92,9 +105,19 @@ export async function createBotSession(roomName: string, callId: string): Promis
 
   room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
     console.log(`[LiveKit Bot] Participant ${participant.identity} disconnected`);
-    // If the user leaves, close the session
+    // If the user leaves, start a grace period before closing.
+    // WebRTC renegotiations can cause brief disconnect/reconnect — don't kill the session instantly.
     if (!participant.identity.startsWith('bot-')) {
-      closeBotSession(callId);
+      if (session.disconnectGraceTimer) clearTimeout(session.disconnectGraceTimer);
+      session.disconnectGraceTimer = setTimeout(() => {
+        // Check if a user is back in the room
+        const stillHasUser = Array.from(room.remoteParticipants.values())
+          .some((p: RemoteParticipant) => !p.identity.startsWith('bot-'));
+        if (!stillHasUser && !session.isClosed) {
+          console.log(`[LiveKit Bot] User still absent after grace period — closing session ${callId}`);
+          closeBotSession(callId);
+        }
+      }, 5000);
     }
   });
 
@@ -116,6 +139,12 @@ export async function createBotSession(roomName: string, callId: string): Promis
   await room.connect(env.livekitWsUrl!, botToken);
   console.log(`[LiveKit Bot] Connected to room ${roomName}`);
 
+  // If session was closed during connect (browser sent /livekit/close), abort early
+  if (session.isClosed) {
+    console.log(`[LiveKit Bot] Session ${callId} was closed during connect — aborting setup`);
+    return { botToken, roomName };
+  }
+
   // --- Publish bot audio track ---
   const audioTrack = LocalAudioTrack.createAudioTrack('bot-audio', audioSource);
   const publishOptions = new TrackPublishOptions();
@@ -123,42 +152,80 @@ export async function createBotSession(roomName: string, callId: string): Promis
   await room.localParticipant!.publishTrack(audioTrack, publishOptions);
   console.log(`[LiveKit Bot] Published audio track`);
 
-  // --- Send initial greeting ---
-  // Small delay to let the user's client subscribe to tracks
-  setTimeout(() => {
-    handleUserText(session, null);
-  }, 500);
+  // --- Send initial greeting when user joins (not on a blind timer) ---
+  // The browser may still be connecting, so we listen for the user participant
+  // to actually appear in the room before sending any audio.
+  let greetingSent = false;
+  const sendGreeting = () => {
+    if (greetingSent || session.isClosed) return;
+    greetingSent = true;
+    console.log(`[LiveKit Bot] User detected in room — sending initial greeting`);
+    // Small delay to let the subscription fully establish
+    setTimeout(() => handleUserText(session, null), 200);
+  };
+
+  // Case A: user already in room (joined before bot)
+  const hasUser = Array.from(room.remoteParticipants.values())
+    .some((p: RemoteParticipant) => !p.identity.startsWith('bot-'));
+
+  if (hasUser) {
+    sendGreeting();
+  }
+
+  // Case B: user joins after bot
+  room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
+    if (!participant.identity.startsWith('bot-')) {
+      console.log(`[LiveKit Bot] User ${participant.identity} joined room`);
+      // Cancel any pending disconnect grace timer — user is back
+      if (session.disconnectGraceTimer) {
+        clearTimeout(session.disconnectGraceTimer);
+        session.disconnectGraceTimer = null;
+      }
+      sendGreeting();
+    }
+  });
 
   return { botToken, roomName };
 }
 
 /**
  * Handle incoming audio stream from the user.
- * Accumulates frames and performs very basic energy-based VAD.
+ * Reads audio frames from a user's remote audio track.
+ * Feeds PCM data into the STT push stream and performs basic energy-based VAD.
  */
 async function handleRemoteAudioTrack(session: BotSession, track: RemoteTrack): Promise<void> {
   const audioStream = new AudioStream(track, SAMPLE_RATE, NUM_CHANNELS);
   const reader = audioStream.getReader();
+
+  // Start STT on first audio track subscription
+  await startStt(session);
 
   try {
     while (!session.isClosed) {
       const { done, value: frame } = await reader.read();
       if (done || session.isClosed) break;
 
+      // Feed raw PCM into Azure STT push stream
+      if (session.sttRecognizer) {
+        const int16 = frame.data;
+        const arrayBuffer = int16.buffer.slice(
+          int16.byteOffset,
+          int16.byteOffset + int16.byteLength
+        );
+        session.sttRecognizer.pushStream.write(arrayBuffer as ArrayBuffer);
+      }
+
+      // Energy-based VAD for silence/speech detection (drives reminder timers)
       const energy = calculateEnergy(frame.data);
       const SPEECH_THRESHOLD = 500;
 
       if (energy > SPEECH_THRESHOLD) {
         if (!session.speechActive) {
           session.speechActive = true;
-          session.audioBuffer = [];
           clearSilenceTimer(session);
           clearReminderTimer(session);
         }
-        session.audioBuffer.push(new Int16Array(frame.data));
       } else if (session.speechActive) {
-        // Silence after speech — start end-of-speech timer
-        session.audioBuffer.push(new Int16Array(frame.data));
         startSilenceTimer(session);
       }
     }
@@ -226,16 +293,86 @@ function clearReminderTimer(session: BotSession): void {
 
 /**
  * Called when user finishes speaking (silence detected after speech).
- * The accumulated audio buffer is NOT used for STT here (LiveKit doesn't bundle STT).
- * Instead, we rely on the browser-side STT or a separate STT service.
- *
- * For now, this is the hook where external STT results would arrive.
- * The primary path is via DataReceived ('user-text' topic).
+ * With STT active, final results come through the recognizer callbacks.
+ * This just ensures the reminder timer restarts.
  */
 async function onSpeechEnd(session: BotSession): Promise<void> {
-  // Audio buffer accumulated but user text comes through DataReceive channel
-  // Start reminder timer while waiting for next user input
   startReminderTimer(session);
+}
+
+/**
+ * Start server-side Azure Speech-to-Text for the LiveKit bot session.
+ * Uses auto-detect (es+en) initially, then restarts with fixed language once confirmed.
+ */
+async function startStt(session: BotSession, language?: 'es' | 'en'): Promise<void> {
+  if (session.isClosed) return;
+
+  // If already running with the right language, skip
+  if (session.sttStarted && language && session.sttLanguage === language) return;
+
+  if (!isAzureSttConfigured()) {
+    console.warn(`[LiveKit Bot] Azure STT not configured — voice recognition disabled for ${session.callId}`);
+    return;
+  }
+
+  // Stop existing recognizer if restarting with new language
+  if (session.sttRecognizer) {
+    try { await session.sttRecognizer.stop(); } catch { /* ignore */ }
+    session.sttRecognizer = null;
+  }
+
+  const useAutoDetect = !language;
+  const lang: 'es' | 'en' = language ?? 'es';
+  session.sttLanguage = language ?? 'auto';
+  session.sttStarted = true;
+
+  console.log(`[LiveKit Bot] Starting STT (mode=${useAutoDetect ? 'auto-detect' : lang}) for ${session.callId}`);
+
+  session.sttRecognizer = createPushStreamRecognizer({
+    language: lang,
+    autoDetect: useAutoDetect,
+    silenceTimeoutMs: 1000,
+
+    onInterim: (result) => {
+      if (session.isClosed) return;
+      session.interimText = result.text;
+      sendDataMessage(session, { type: 'interim', text: result.text });
+    },
+
+    onFinal: async (result) => {
+      if (session.isClosed) return;
+      const text = result.text.trim();
+      if (!text) return;
+      session.interimText = '';
+      console.log(`[LiveKit Bot] STT final: "${text}" (lang=${result.language}, callId=${session.callId})`);
+      sendDataMessage(session, { type: 'transcription', text, isFinal: true });
+      await handleUserText(session, text);
+    },
+
+    onSilence: () => {
+      if (session.isClosed) return;
+      if (session.interimText.trim()) {
+        const text = session.interimText.trim();
+        session.interimText = '';
+        console.log(`[LiveKit Bot] STT silence with pending interim: "${text}" (callId=${session.callId})`);
+        sendDataMessage(session, { type: 'transcription', text, isFinal: true });
+        handleUserText(session, text);
+      }
+    },
+
+    onError: (error) => {
+      console.error(`[LiveKit Bot] STT error for ${session.callId}:`, error.message);
+    },
+  });
+
+  try {
+    await session.sttRecognizer.start();
+    console.log(`[LiveKit Bot] STT recognizer started for ${session.callId}`);
+  } catch (err) {
+    console.error(`[LiveKit Bot] Failed to start STT for ${session.callId}:`, err);
+    session.sttRecognizer = null;
+    session.sttStarted = false;
+  }
 }
 
 /**
@@ -247,17 +384,25 @@ async function handleUserText(session: BotSession, text: string | null): Promise
   clearReminderTimer(session);
 
   try {
+    console.log(`[LiveKit Bot] handleUserText called (text=${text === null ? 'null' : `"${text.substring(0, 40)}"`}, callId=${session.callId})`);
+    const dialogStart = Date.now();
     const result = await handleUserInput(session.callId, text, async (sentence: string) => {
       // Streaming callback: speak each sentence as it arrives from LLM
       if (!session.isClosed) {
         await speakText(session, sentence);
       }
     });
+    console.log(`[LiveKit Bot] handleUserInput returned in ${Date.now() - dialogStart}ms (step=${result.state.step}, reply=${result.replyText?.substring(0, 60) || 'none'})`);
 
     // ── Auto language switch: notify browser via data channel ──
     if (result.languageChanged) {
       console.log(`[LiveKit Bot] Language auto-switched to '${result.languageChanged}' for ${session.callId}`);
       sendDataMessage(session, { type: 'language-detected', language: result.languageChanged });
+      // Restart STT with the confirmed language for better accuracy
+      const confirmedLang = result.languageChanged === 'en' ? 'en' as const : 'es' as const;
+      if (session.sttLanguage !== confirmedLang) {
+        startStt(session, confirmedLang);
+      }
     }
 
     // If streaming didn't fire (non-streaming path), speak the full response
@@ -298,6 +443,8 @@ async function handleUserText(session: BotSession, text: string | null): Promise
 
 /**
  * Synthesize text to speech and send audio frames through the bot's audio track.
+ * Uses streaming TTS to push frames as they arrive (reducing first-byte latency from ~10s to ~1-2s).
+ * Falls back to non-streaming if streaming fails.
  */
 async function speakText(session: BotSession, text: string): Promise<void> {
   if (session.isClosed || !text.trim()) return;
@@ -306,30 +453,72 @@ async function speakText(session: BotSession, text: string): Promise<void> {
   const lang = state.language === 'en' ? 'en' : 'es' as const;
 
   try {
-    const ttsResult = await synthesizeTts(text, lang, 'pcm16k');
-    if (!ttsResult) return;
+    // ── Check greeting cache first — instant playback, no TTS call ──
+    const cachedFrames = getCachedGreetingFrames(text);
+    if (cachedFrames) {
+      const cacheStart = Date.now();
+      for (const samples of cachedFrames) {
+        if (session.isClosed) break;
+        const frame = new AudioFrame(samples, PCM_SAMPLE_RATE, NUM_CHANNELS, SAMPLES_PER_FRAME);
+        await session.audioSource.captureFrame(frame);
+      }
+      console.log(`[LiveKit Bot] Played cached greeting (${cachedFrames.length} frames, ${Date.now() - cacheStart}ms)`);
+      return;
+    }
 
-    // TTS returns audio as a Buffer. We need to convert to PCM Int16 frames.
-    // Azure TTS with pcm format returns raw PCM 16-bit signed LE mono 16kHz
-    const pcmBuffer = ttsResult.bytes;
+    // ── Streaming TTS: push frames as they arrive from Azure ──
+    const ttsStart = Date.now();
     const samplesPerFrame = (SAMPLE_RATE * FRAME_SIZE_MS) / 1000; // 320 samples
     const bytesPerFrame = samplesPerFrame * 2; // 16-bit = 2 bytes per sample
+    let totalBytes = 0;
+    let firstChunkMs = 0;
+    let residualBuffer = Buffer.alloc(0); // leftover bytes from previous chunk
 
-    for (let offset = 0; offset < pcmBuffer.length; offset += bytesPerFrame) {
-      if (session.isClosed) break;
+    await synthesizeTtsStreaming(text, lang, {
+      onAudioChunk: (chunk: Buffer) => {
+        if (session.isClosed) return;
+        if (!firstChunkMs) {
+          firstChunkMs = Date.now() - ttsStart;
+          console.log(`[LiveKit Bot] TTS first chunk in ${firstChunkMs}ms`);
+        }
+        totalBytes += chunk.length;
 
-      const end = Math.min(offset + bytesPerFrame, pcmBuffer.length);
-      const chunkLength = end - offset;
-      const samples = new Int16Array(samplesPerFrame);
+        // Combine residual with new chunk
+        const pcmBuffer = residualBuffer.length > 0
+          ? Buffer.concat([residualBuffer, chunk])
+          : chunk;
 
-      // Copy PCM data (little-endian Int16)
-      for (let i = 0; i < chunkLength / 2 && i < samplesPerFrame; i++) {
-        samples[i] = pcmBuffer.readInt16LE(offset + i * 2);
-      }
+        let offset = 0;
+        for (; offset + bytesPerFrame <= pcmBuffer.length; offset += bytesPerFrame) {
+          const samples = new Int16Array(samplesPerFrame);
+          for (let i = 0; i < samplesPerFrame; i++) {
+            samples[i] = pcmBuffer.readInt16LE(offset + i * 2);
+          }
+          const frame = new AudioFrame(samples, SAMPLE_RATE, NUM_CHANNELS, samplesPerFrame);
+          // captureFrame returns a Promise; frames queue in AudioSource and play at real-time rate
+          session.audioSource.captureFrame(frame).catch(() => { /* session closed */ });
+        }
 
-      const frame = new AudioFrame(samples, SAMPLE_RATE, NUM_CHANNELS, samplesPerFrame);
-      await session.audioSource.captureFrame(frame);
-    }
+        // Save leftover bytes for next chunk
+        residualBuffer = Buffer.from(pcmBuffer.subarray(offset));
+      },
+      onComplete: () => {
+        // Push any remaining residual bytes as a final padded frame
+        if (residualBuffer.length > 0 && !session.isClosed) {
+          const samples = new Int16Array(samplesPerFrame);
+          for (let i = 0; i < residualBuffer.length / 2 && i < samplesPerFrame; i++) {
+            samples[i] = residualBuffer.readInt16LE(i * 2);
+          }
+          const frame = new AudioFrame(samples, SAMPLE_RATE, NUM_CHANNELS, samplesPerFrame);
+          session.audioSource.captureFrame(frame).catch(() => { /* session closed */ });
+          residualBuffer = Buffer.alloc(0);
+        }
+        console.log(`[LiveKit Bot] TTS streaming complete: ${totalBytes} bytes in ${Date.now() - ttsStart}ms (first chunk: ${firstChunkMs}ms)`);
+      },
+      onError: (error: Error) => {
+        console.error(`[LiveKit Bot] TTS streaming error for ${session.callId}:`, error.message);
+      },
+    }, 'pcm16k');
   } catch (err) {
     console.error(`[LiveKit Bot] TTS error for ${session.callId}:`, err);
   }
@@ -362,6 +551,19 @@ export async function closeBotSession(callId: string): Promise<void> {
   session.isClosed = true;
   clearSilenceTimer(session);
   clearReminderTimer(session);
+  if (session.disconnectGraceTimer) {
+    clearTimeout(session.disconnectGraceTimer);
+    session.disconnectGraceTimer = null;
+  }
+
+  // Stop STT recognizer
+  if (session.sttRecognizer) {
+    try {
+      await session.sttRecognizer.stop();
+      console.log(`[LiveKit Bot] STT stopped for ${callId}`);
+    } catch { /* ignore */ }
+    session.sttRecognizer = null;
+  }
 
   try {
     await session.audioSource.close();

@@ -186,13 +186,15 @@ export interface StreamingTtsCallbacks {
 export async function synthesizeSpeechStreaming(
   text: string,
   language: SpeechLang,
-  callbacks: StreamingTtsCallbacks
+  callbacks: StreamingTtsCallbacks,
+  outputFormat: TtsOutputFormat = 'mp3'
 ): Promise<void> {
   await acquireTtsSlot();
 
   const voice = resolveVoice(language);
-  const cfg = createSpeechConfig(voice);
+  const cfg = createSpeechConfig(voice, outputFormat);
 
+  // Use a pull-stream output to avoid playing to speakers; the synthesizing event provides chunks
   const pullStream = sdk.AudioOutputStream.createPullStream();
   const audioConfig = sdk.AudioConfig.fromStreamOutput(pullStream);
   const synthesizer = new sdk.SpeechSynthesizer(cfg, audioConfig);

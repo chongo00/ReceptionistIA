@@ -30,6 +30,11 @@ export interface CustomerMatch {
   accountManagerId: number | null;
 }
 
+export interface ConversationTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
@@ -67,6 +72,8 @@ export interface ConversationState {
   silenceCount: number;
   /** Whether the language has been auto-detected from user speech */
   languageDetected: boolean;
+  /** Recent conversation turns for LLM context */
+  conversationTurns: ConversationTurn[];
 }
 
 export function createInitialState(callId: string): ConversationState {
@@ -96,5 +103,6 @@ export function createInitialState(callId: string): ConversationState {
     lastQuestion: null,
     silenceCount: 0,
     languageDetected: false,
+    conversationTurns: [],
   };
 }
